@@ -12,6 +12,24 @@ import {
 } from "@/lib/limits";
 import type { WebPage } from "@/lib/readers/web";
 import WebPreview from "@/components/WebPreview";
+import ProgressSteps, { type StepName, type StepState } from "@/components/ProgressSteps";
+
+// 지금 상태를 4단계 진행 표시로 바꾼다. 비교·맞춤법·매뉴얼은 아직 만들지 않아 "준비 중"으로 보인다.
+function progressOf(status: Status): { states: Record<StepName, StepState>; detail?: string } | null {
+  const later = { 비교: "unavailable", 맞춤법: "unavailable", 매뉴얼: "unavailable" } as const;
+  switch (status.kind) {
+    case "idle":
+      return null;
+    case "uploading":
+      return { states: { 읽기: "active", ...later }, detail: `한글파일 올리는 중 ${status.percent}%` };
+    case "reading":
+      return { states: { 읽기: "active", ...later }, detail: "웹페이지 읽는 중" };
+    case "read":
+      return { states: { 읽기: "done", ...later } };
+    case "error":
+      return { states: { 읽기: "error", ...later } };
+  }
+}
 
 type Status =
   | { kind: "idle" }
@@ -83,6 +101,7 @@ export default function VerifyForm() {
   }
 
   const busy = status.kind === "uploading" || status.kind === "reading";
+  const progress = progressOf(status);
 
   return (
     <div className="space-y-6">
@@ -108,7 +127,7 @@ export default function VerifyForm() {
           />
           {urlError && <p className="text-sm text-red-600">{urlError}</p>}
         </div>
-  
+
         <div className="space-y-2">
           <label htmlFor="file" className="block font-semibold">
             ② 부점 한글파일
@@ -125,11 +144,8 @@ export default function VerifyForm() {
           </p>
           {fileError && <p className="text-sm text-red-600">{fileError}</p>}
         </div>
-  
+
         <div className="flex items-center justify-end gap-4">
-          {status.kind === "uploading" && <p className="text-sm text-slate-500">파일 올리는 중… {status.percent}%</p>}
-          {status.kind === "reading" && <p className="text-sm text-slate-500">웹페이지 읽는 중…</p>}
-          {status.kind === "read" && <p className="text-sm text-emerald-600">웹페이지를 읽었습니다.</p>}
           {status.kind === "error" && <p className="text-sm text-red-600">{status.message}</p>}
           <button
             type="submit"
@@ -140,6 +156,7 @@ export default function VerifyForm() {
           </button>
         </div>
       </form>
+      {progress && <ProgressSteps states={progress.states} detail={progress.detail} />}
       {status.kind === "read" && <WebPreview page={status.web} />}
     </div>
   );

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import ResultsView from "@/components/ResultsView";
+import ProgressSteps from "@/components/ProgressSteps";
 import type { Finding } from "@/lib/types";
 
 // 결과 화면을 미리 확인하기 위한 예시 화면 (개발 중에만 열린다).
@@ -105,6 +106,11 @@ export default function DemoResultsPage() {
       <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
         예시 결과 화면입니다. 실제 검증 결과가 아니라 화면 확인용으로 만든 가짜 데이터입니다.
       </p>
+      <h2 className="font-semibold">진행 상황 예시</h2>
+      <ProgressSteps states={{ 읽기: "done", 비교: "active", 맞춤법: "waiting", 매뉴얼: "waiting" }} detail="웹페이지와 한글파일 비교 중" />
+      <ProgressSteps states={{ 읽기: "done", 비교: "done", 맞춤법: "error", 매뉴얼: "waiting" }} />
+      <ProgressSteps states={{ 읽기: "done", 비교: "done", 맞춤법: "done", 매뉴얼: "done" }} />
+      <h2 className="pt-4 font-semibold">결과 화면 예시</h2>
       <ResultsView findings={samples} />
     </main>
   );
