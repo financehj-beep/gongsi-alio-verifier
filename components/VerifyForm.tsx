@@ -11,7 +11,9 @@ import {
   formatBytes,
 } from "@/lib/limits";
 import type { WebPage } from "@/lib/readers/web";
+import type { HwpDocument } from "@/lib/readers/hwp-types";
 import WebPreview from "@/components/WebPreview";
+import HwpPreview from "@/components/HwpPreview";
 import ProgressSteps, { type StepName, type StepState } from "@/components/ProgressSteps";
 
 // 지금 상태를 4단계 진행 표시로 바꾼다. 비교·맞춤법·매뉴얼은 아직 만들지 않아 "준비 중"으로 보인다.
@@ -23,7 +25,7 @@ function progressOf(status: Status): { states: Record<StepName, StepState>; deta
     case "uploading":
       return { states: { 읽기: "active", ...later }, detail: `한글파일 올리는 중 ${status.percent}%` };
     case "reading":
-      return { states: { 읽기: "active", ...later }, detail: "웹페이지 읽는 중" };
+      return { states: { 읽기: "active", ...later }, detail: "웹페이지와 한글파일 읽는 중" };
     case "read":
       return { states: { 읽기: "done", ...later } };
     case "error":
@@ -35,7 +37,7 @@ type Status =
   | { kind: "idle" }
   | { kind: "uploading"; percent: number }
   | { kind: "reading" }
-  | { kind: "read"; web: WebPage }
+  | { kind: "read"; web: WebPage; hwp: HwpDocument }
   | { kind: "error"; message: string };
 
 // Design Ref: DESIGN.md §2.1 입력 칸 — URL 1개 + 한글파일 1개 + [검증 시작]
@@ -64,6 +66,7 @@ export default function VerifyForm() {
     if (urlProblem || fileError) return;
 
     // 큰 파일은 서버를 거치지 않고 저장 공간 tmp/ 폴더로 바로 올린다 (DESIGN.md §4.3)
+    let pathname: string;
     try {
       setStatus({ kind: "uploading", percent: 0 });
       const { ready } = (await (await fetch("/api/upload")).json()) as { ready: boolean };
@@ -72,31 +75,33 @@ export default function VerifyForm() {
         return;
       }
       const ext = extensionOf(file.name);
-      await upload(`${TMP_PREFIX}${crypto.randomUUID()}${ext}`, file, {
+      ({ pathname } = await upload(`${TMP_PREFIX}${crypto.randomUUID()}${ext}`, file, {
         access: "private",
         handleUploadUrl: "/api/upload",
         clientPayload: JSON.stringify({ kind: "verify" }),
         contentType: CONTENT_TYPES[ext],
         multipart: file.size > 5 * 1024 * 1024,
         onUploadProgress: ({ percentage }) => setStatus({ kind: "uploading", percent: Math.round(percentage) }),
-      });
+      }));
     } catch {
       setStatus({ kind: "error", message: "파일을 올리지 못했습니다. 잠시 후 다시 시도해 주세요." });
       return;
     }
 
-    // 1단계 읽기: 지금은 웹페이지만 읽는다 (한글파일 읽기는 PLAN.md 8~9번에서 이어 붙인다)
+    // 1단계 읽기: 웹페이지와 한글파일을 함께 읽는다. 서버는 다 읽으면 올린 파일을 바로 지운다.
     try {
       setStatus({ kind: "reading" });
       const res = await fetch("/api/verify/read", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: url.trim(), pathname }),
       });
-      const data = (await res.json()) as { ok: true; web: WebPage } | { ok: false; error: { message: string } };
-      setStatus(data.ok ? { kind: "read", web: data.web } : { kind: "error", message: data.error.message });
+      const data = (await res.json()) as
+        | { ok: true; web: WebPage; hwp: HwpDocument }
+        | { ok: false; error: { message: string } };
+      setStatus(data.ok ? { kind: "read", web: data.web, hwp: data.hwp } : { kind: "error", message: data.error.message });
     } catch {
-      setStatus({ kind: "error", message: "웹페이지를 읽는 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요." });
+      setStatus({ kind: "error", message: "파일을 읽는 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요." });
     }
   }
 
@@ -157,6 +162,7 @@ export default function VerifyForm() {
         </div>
       </form>
       {progress && <ProgressSteps states={progress.states} detail={progress.detail} />}
+      {status.kind === "read" && <HwpPreview doc={status.hwp} />}
       {status.kind === "read" && <WebPreview page={status.web} />}
     </div>
   );
