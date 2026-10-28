@@ -1,4 +1,5 @@
 import { extensionOf } from "@/lib/limits";
+import { checkPair } from "@/lib/checks/pair";
 import { readWebPage } from "@/lib/readers/web";
 import { readHwpx } from "@/lib/readers/hwpx";
 import { hwpFail, type HwpReadResult } from "@/lib/readers/hwp-types";
@@ -6,7 +7,7 @@ import { cleanupOldTmpFiles } from "@/lib/storage/blob";
 import { deleteTmpFile, isTmpVerifyPath, readTmpFile } from "@/lib/storage/tmp-file";
 
 // Design Ref: DESIGN.md §6 1단계 읽기 — 웹페이지와 한글파일 글자를 뽑아 화면에 돌려준다.
-// 아직 .hwp 읽기(PLAN.md 9번), 짝 확인(10번), 이미지 글자 읽기(15번)는 없다.
+// 짝 확인 결과도 함께 돌려준다. 아직 .hwp 읽기(PLAN.md 9번)와 이미지 글자 읽기(15번)는 없다.
 export const maxDuration = 60;
 
 function bad(message: string) {
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
     if (!hwp.ok) return Response.json({ ok: false, error: hwp.error, side: "hwp" }, { status: 422 });
     if (!web.ok) return Response.json({ ok: false, error: web.error, side: "web" }, { status: 422 });
     // 읽은 글자는 저장하지 않고 화면에 돌려준다 (DESIGN.md §3 단계 사이에 글자를 넘기는 방법)
-    return Response.json({ ok: true, web: web.page, hwp: hwp.doc });
+    return Response.json({ ok: true, web: web.page, hwp: hwp.doc, pair: checkPair(hwp.doc, web.page) });
   } catch {
     return Response.json(
       { ok: false, error: { code: "unknown", message: "파일을 읽는 중 문제가 생겼습니다. 다시 시도해 주세요." } },

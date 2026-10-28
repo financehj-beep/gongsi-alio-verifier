@@ -14,6 +14,8 @@ import type { WebPage } from "@/lib/readers/web";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 import WebPreview from "@/components/WebPreview";
 import HwpPreview from "@/components/HwpPreview";
+import PairWarning from "@/components/PairWarning";
+import type { PairCheck } from "@/lib/checks/pair";
 import ProgressSteps, { type StepName, type StepState } from "@/components/ProgressSteps";
 
 // 지금 상태를 4단계 진행 표시로 바꾼다. 비교·맞춤법·매뉴얼은 아직 만들지 않아 "준비 중"으로 보인다.
@@ -26,6 +28,9 @@ function progressOf(status: Status): { states: Record<StepName, StepState>; deta
       return { states: { 읽기: "active", ...later }, detail: `한글파일 올리는 중 ${status.percent}%` };
     case "reading":
       return { states: { 읽기: "active", ...later }, detail: "웹페이지와 한글파일 읽는 중" };
+    case "pairWarning":
+      // 읽기는 끝났고 담당자의 선택을 기다리는 중이라 시간을 세지 않는다
+      return { states: { 읽기: "done", ...later }, detail: "짝 확인: 담당자가 [계속] 또는 [취소]를 고를 차례" };
     case "read":
       return { states: { 읽기: "done", ...later } };
     case "error":
@@ -37,6 +42,7 @@ type Status =
   | { kind: "idle" }
   | { kind: "uploading"; percent: number }
   | { kind: "reading" }
+  | { kind: "pairWarning"; web: WebPage; hwp: HwpDocument; pair: PairCheck }
   | { kind: "read"; web: WebPage; hwp: HwpDocument }
   | { kind: "error"; message: string };
 
@@ -97,15 +103,19 @@ export default function VerifyForm() {
         body: JSON.stringify({ url: url.trim(), pathname }),
       });
       const data = (await res.json()) as
-        | { ok: true; web: WebPage; hwp: HwpDocument }
+        | { ok: true; web: WebPage; hwp: HwpDocument; pair: PairCheck }
         | { ok: false; error: { message: string } };
-      setStatus(data.ok ? { kind: "read", web: data.web, hwp: data.hwp } : { kind: "error", message: data.error.message });
+      if (!data.ok) setStatus({ kind: "error", message: data.error.message });
+      // 짝 확인: 다른 공고로 보이면 담당자가 계속할지 고른다
+      else if (!data.pair.likelySame) setStatus({ kind: "pairWarning", web: data.web, hwp: data.hwp, pair: data.pair });
+      else setStatus({ kind: "read", web: data.web, hwp: data.hwp });
     } catch {
       setStatus({ kind: "error", message: "파일을 읽는 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요." });
     }
   }
 
-  const busy = status.kind === "uploading" || status.kind === "reading";
+  // 짝 확인 경고가 떠 있는 동안에는 먼저 [계속]이나 [취소]를 고르게 한다
+  const busy = status.kind === "uploading" || status.kind === "reading" || status.kind === "pairWarning";
   const progress = progressOf(status);
 
   return (
@@ -162,6 +172,13 @@ export default function VerifyForm() {
         </div>
       </form>
       {progress && <ProgressSteps states={progress.states} detail={progress.detail} />}
+      {status.kind === "pairWarning" && (
+        <PairWarning
+          pair={status.pair}
+          onContinue={() => setStatus({ kind: "read", web: status.web, hwp: status.hwp })}
+          onCancel={() => setStatus({ kind: "idle" })}
+        />
+      )}
       {status.kind === "read" && <HwpPreview doc={status.hwp} />}
       {status.kind === "read" && <WebPreview page={status.web} />}
     </div>
