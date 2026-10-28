@@ -12,6 +12,8 @@
 
 - Next.js 16.4.3 (App Router), React 19, TypeScript, Tailwind CSS 4, ESLint
 - AI 서비스: OpenAI API (`.env`의 `OPENAI_API_KEY` 사용)
+- 파일 저장 공간: Vercel Blob (`.env`의 `BLOB_READ_WRITE_TOKEN` 사용, 보관함을 만들 때 생김)
+- 설계(화면 구성, 데이터 흐름, 추가 기술 목록)는 [DESIGN.md](DESIGN.md)를 따른다.
 - 배포: Vercel (Part 5)
 - 기술 스택은 PRD에 정한 대로 Next.js로 고정한다. 다른 프레임워크로 바꾸거나 마이그레이션을 제안하지 않는다. 배포는 Vercel을 사용한다.
 - PRD.md 8번에 없는 기술·라이브러리를 새로 들이기 전에는 반드시 먼저 사용자에게 묻는다.
@@ -94,6 +96,3 @@ OpenAI API에 보내는 프롬프트와 결과 처리 코드는 PRD.md 5번의 "
 - 커밋 메시지는 한국어로, 무엇을 왜 바꿨는지 한 줄로 적는다.
 - 커밋하기 전에 `.env` 같은 비밀 값 파일이 커밋에 들어가지 않았는지 확인한다.
 
-## 미해결 사항
-
-- 매뉴얼 파일 저장 공간(PRD.md 8번)으로 어떤 서비스를 쓸지 아직 정하지 않았다. 개발 단위 13번 전에 정한다.
