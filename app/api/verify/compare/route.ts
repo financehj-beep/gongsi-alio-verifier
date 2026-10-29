@@ -1,4 +1,4 @@
-import { TooLongError, TOO_LONG_MESSAGE } from "@/lib/ai/pool";
+import { TooLongError, TOO_LONG_MESSAGE, aiFailMessage } from "@/lib/ai/pool";
 import { compareTexts } from "@/lib/ai/compare";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 import type { WebPage } from "@/lib/readers/web";
@@ -33,6 +33,6 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, findings });
   } catch (error) {
     if (error instanceof TooLongError) return fail(413, TOO_LONG_MESSAGE);
-    return fail(502, "AI 검사 중 문제가 생겼습니다 (비교 단계). 다시 시도해 주세요.");
+    return fail(502, aiFailMessage(error, "비교"));
   }
 }

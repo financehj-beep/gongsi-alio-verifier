@@ -1,4 +1,4 @@
-import { TooLongError, TOO_LONG_MESSAGE } from "@/lib/ai/pool";
+import { TooLongError, TOO_LONG_MESSAGE, aiFailMessage } from "@/lib/ai/pool";
 import { checkManualRules } from "@/lib/ai/manual-check";
 import { loadCurrentManual } from "@/lib/manual/store";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
@@ -38,6 +38,6 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, findings, manual: { fileName: loaded.manual.fileName, replacedAt: current.replacedAt } });
   } catch (error) {
     if (error instanceof TooLongError) return fail(413, TOO_LONG_MESSAGE);
-    return fail(502, "AI 검사 중 문제가 생겼습니다 (매뉴얼 단계). 다시 시도해 주세요.");
+    return fail(502, aiFailMessage(error, "매뉴얼"));
   }
 }

@@ -187,7 +187,7 @@ H…는 한글파일 문장이니 웹페이지 전체에서, W…는 웹페이�
 type Judged = { verdict: "있음" | "없음" | "본문 아님"; counterpart: string };
 
 // 판정 결과와, AI 호출이 실패해 판정하지 못한 문장 번호들
-async function judgeLeftovers(hs: HItem[], ws: WItem[], targets: (HItem | WItem)[]): Promise<{ judged: Map<string, Judged>; failed: Set<string> }> {
+async function judgeLeftovers(hs: HItem[], ws: WItem[], targets: (HItem | WItem)[], deadlineAt: number): Promise<{ judged: Map<string, Judged>; failed: Set<string> }> {
   const cap = (items: { id: string; text: string }[]) => {
     let text = "";
     for (const i of items) {
@@ -199,13 +199,20 @@ async function judgeLeftovers(hs: HItem[], ws: WItem[], targets: (HItem | WItem)
   };
   const out = new Map<string, Judged>();
   const failed = new Set<string>();
-  for (let i = 0; i < targets.length; i += 40) {
-    const part = targets.slice(i, i + 40);
+  // 40개씩 묶어 동시에 몇 개만 돌린다 (순서대로 하나씩 부르면 문장이 많은 문서에서 시간이 모자란다)
+  const parts: (HItem | WItem)[][] = [];
+  for (let i = 0; i < targets.length; i += 40) parts.push(targets.slice(i, i + 40));
+  await mapLimit(parts, async (part) => {
+    // 시간 상한을 넘겼으면 AI를 부르지 않고 "확인 필요"로 알린다
+    if (Date.now() > deadlineAt) {
+      part.forEach((t) => failed.add(t.id));
+      return;
+    }
     const run = async () => {
       const response = await getOpenAI().responses.parse({
         model: modelName(),
         ...reasoningOption(),
-    store: false,
+        store: false,
         instructions: LEFTOVER_INSTRUCTIONS,
         input: `[한글파일 전체]\n${cap(hs)}\n[웹페이지 전체]\n${cap(ws)}\n[판정할 문장]\n${part.map((t) => `${t.id}: ${t.text}`).join("\n")}`,
         text: { format: zodTextFormat(LeftoverSchema, "leftover") },
@@ -214,13 +221,13 @@ async function judgeLeftovers(hs: HItem[], ws: WItem[], targets: (HItem | WItem)
       return response.output_parsed;
     };
     try {
-      const answer = await run().catch(run);
+      const answer = await run().catch((e) => (Date.now() > deadlineAt ? Promise.reject(e) : run()));
       answer.verdicts.forEach((v) => out.set(idOf(v.id), { verdict: v.verdict, counterpart: idOf(v.counterpart) }));
     } catch {
       // 판정이 실패한 문장은 조용히 빼지 않고 "확인 필요"로 알린다
       part.forEach((t) => failed.add(t.id));
     }
-  }
+  });
   return { judged: out, failed };
 }
 
@@ -306,6 +313,7 @@ async function recheckMissing(
     hById: Map<string, HItem>;
     wById: Map<string, WItem>;
   },
+  deadlineAt: number,
 ): Promise<Finding[]> {
   const candidates = findings.filter((f) => f.category === "누락" && missingIds.has(f));
   if (candidates.length === 0) return findings;
@@ -325,8 +333,11 @@ async function recheckMissing(
     const id = missingIds.get(f)!;
     return { id, text: (ctx.hById.get(id) ?? ctx.wById.get(id))!.text };
   });
-  for (let i = 0; i < targets.length; i += 30) {
-    const part = targets.slice(i, i + 30);
+  // 30개씩 묶어 동시에 몇 개만 돌린다. 시간 상한을 넘기면 남은 묶음은 재확인하지 않고 앞 단계 판단(누락)을 그대로 둔다.
+  const parts: typeof targets[] = [];
+  for (let i = 0; i < targets.length; i += 30) parts.push(targets.slice(i, i + 30));
+  await mapLimit(parts, async (part) => {
+    if (Date.now() > deadlineAt) return;
     const run = async () => {
       const response = await getOpenAI().responses.parse({
         model: modelName(),
@@ -340,7 +351,7 @@ async function recheckMissing(
       return response.output_parsed;
     };
     try {
-      const answer = await run().catch(run);
+      const answer = await run().catch((e) => (Date.now() > deadlineAt ? Promise.reject(e) : run()));
       answer.verdicts.forEach((v) =>
         result.set(idOf(v.id), { verdict: v.verdict, counterpart: idOf(v.counterpart), missingInfo: cleanReason(v.missingInfo) }),
       );
@@ -348,7 +359,7 @@ async function recheckMissing(
       // 재확인에 실패해도 앞 단계 판단(누락)은 그대로 둔다
       part.forEach((t) => failed.add(t.id));
     }
-  }
+  });
 
   const out: Finding[] = [];
   for (const f of findings) {
@@ -410,7 +421,11 @@ async function recheckMissing(
   return out;
 }
 
+// 비교 단계 전체에 쓸 수 있는 시간 (서버 기능 제한 60초보다 여유 있게). 넘기면 뒤쪽 확인 단계는 건너뛴다.
+const COMPARE_BUDGET_MS = 40_000;
+
 export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Finding[]> {
+  const deadlineAt = Date.now() + COMPARE_BUDGET_MS;
   // 문단·문장 수가 비정상적으로 많으면 짝 맞추기(제곱 계산)와 AI 호출이 폭증하므로 먼저 멈춘다
   assertCounts(doc.paragraphs.length, page.blocks.reduce((n, b) => n + b.sentences.length + 1, 0));
   const hs = hwpItems(doc);
@@ -580,7 +595,7 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
     ...restW.filter((w) => !pairedW.has(w.id) && !flaggedW.has(w.id)),
   ];
   if (leftovers.length > 0) {
-    const { judged, failed } = await judgeLeftovers(hs, ws, leftovers);
+    const { judged, failed } = await judgeLeftovers(hs, ws, leftovers, deadlineAt);
     for (const item of leftovers) {
       const h = hById.get(item.id);
       const w = wById.get(item.id);
@@ -633,6 +648,6 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
   }
 
   // ④ 누락 후보는 문장 하나만 보지 않고 문서 전체 맥락으로 한 번 더 판단한다
-  const finalFindings = await recheckMissing(hs, ws, findings, missingIds, { hwpLoc, origin, hById, wById });
+  const finalFindings = await recheckMissing(hs, ws, findings, missingIds, { hwpLoc, origin, hById, wById }, deadlineAt);
   return [...spacingFindings, ...finalFindings];
 }

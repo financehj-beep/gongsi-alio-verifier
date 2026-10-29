@@ -15,6 +15,8 @@ type HItem = { id: string; text: string; index: number; inTable: boolean };
 const CHUNK_CHARS = 5000;
 // 한 번에 보내는 매뉴얼 글자 한도. 이보다 길면 한글파일 조각과 관련 있는 조항만 골라 보낸다 (DESIGN.md §3 AI 입력 한도)
 const MANUAL_CHARS = 40000;
+// 두 번째 검사를 시작할 수 있는 마감 (검사 시작 후 이 시간이 지나면 건너뛴다)
+const SECOND_PASS_BUDGET_MS = 25_000;
 
 const AnswerSchema = z.object({
   violations: z.array(
@@ -216,11 +218,14 @@ export async function checkManualRules(doc: HwpDocument, manual: ManualDoc): Pro
   const orgName = items[0]?.text.match(/^[가-힣A-Za-z()·]{3,}(?=\s)/)?.[0];
   // 같은 검사를 두 번 따로 돌려 합친다: AI 답이 실행마다 조금씩 달라 한 번만 보면 놓치는 위반이 있다.
   // 모양이 틀린 답은 한 번 더 요청한다 (DESIGN.md §1)
-  const jobs = chunks.flatMap((c) => [c, c]);
+  // 첫 번째 검사는 문서 전체를 빠짐없이 보고, 두 번째 검사는 시간이 남을 때만 돌린다 (큰 문서가 서버 기능 제한 60초를 넘기지 않게)
+  const deadlineAt = Date.now() + SECOND_PASS_BUDGET_MS;
+  const jobs = [...chunks.map((c) => ({ c, second: false })), ...chunks.map((c) => ({ c, second: true }))];
   assertChunkCount(jobs.length / 2);
   // 공시 항목에 해당하는 장과 공통 장의 조항만 검사에 쓴다
   const scope = await pickScope(clauses, items);
-  const answers = await mapLimit(jobs, async (c) => {
+  const answers = await mapLimit(jobs, async ({ c, second }) => {
+    if (second && Date.now() > deadlineAt) return { violations: [] };
     const picked = pickClauses(scope.clauses, c.map((h) => h.text).join(" "));
     try {
       return await askChunk(picked, c, orgName, scope.items);

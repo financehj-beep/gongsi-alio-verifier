@@ -43,3 +43,10 @@ export async function mapLimit<T, R>(items: T[], fn: (item: T) => Promise<R>): P
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
   return results;
 }
+
+// AI 호출이 실패했을 때 담당자에게 보여줄 안내. 요금(잔액)이 바닥난 경우는 원인을 따로 알려 준다.
+export function aiFailMessage(error: unknown, stage: string): string {
+  const status = (error as { status?: number } | null)?.status;
+  if (status === 429) return `AI 사용 한도(충전 잔액)가 부족하거나 요청이 몰렸습니다 (${stage} 단계). 잔액을 확인한 뒤 다시 시도해 주세요.`;
+  return `AI 검사 중 문제가 생겼습니다 (${stage} 단계). 다시 시도해 주세요.`;
+}

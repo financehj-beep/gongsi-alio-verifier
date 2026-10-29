@@ -177,6 +177,11 @@ export default function VerifyForm() {
           setStatus({ kind: "error", step, message: TOO_LONG, findings, ...texts });
           return;
         }
+        // 서버가 시간 제한(60초)을 넘겨 중간에 끊으면 JSON이 아닌 오류 페이지가 온다. 원인을 알려 준다.
+        if (res.status === 504 || !(res.headers.get("content-type") ?? "").includes("json")) {
+          setStatus({ kind: "error", step, message: `검사 시간이 너무 오래 걸려 중단되었습니다 (${step} 단계). 문서가 크면 부점에 내용을 나눈 파일을 요청해 주세요.`, findings, ...texts });
+          return;
+        }
         const data = (await res.json()) as
           | { ok: true; findings: Finding[]; manual?: { fileName: string; replacedAt?: string } }
           | { ok: false; error: { message: string } };
