@@ -43,7 +43,7 @@ export type Finding = {
   // 맞춤법일 때만
   suggestion?: string;
   // 규칙 위반일 때만. 페이지를 모르면 항목 번호만 쓴다.
-  manualClause?: { item: string; page?: number };
+  manualClause?: { item: string; page?: number; quote?: string };
   explanation: string;
 };
 

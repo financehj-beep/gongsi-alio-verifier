@@ -88,6 +88,9 @@ export default function FindingCard({ finding, number }: { finding: Finding; num
             {f.manualClause.page ? ` (${f.manualClause.page}쪽)` : ""}
           </Line>
         )}
+        {f.manualClause?.quote && (
+          <Line label="조항 원문">{f.manualClause.quote}</Line>
+        )}
       </div>
 
       <p className="text-slate-600 dark:text-slate-400">{f.explanation}</p>

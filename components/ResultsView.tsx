@@ -7,7 +7,7 @@ import { CATEGORIES, type Category, type Finding } from "@/lib/types";
 export const PAGE_SIZE = 20;
 
 // Design Ref: DESIGN.md §2.1 결과 영역 — 카테고리 탭 5개와 전체 건수, 한 화면 20건, 페이지 넘김
-export default function ResultsView({ findings }: { findings: Finding[] }) {
+export default function ResultsView({ findings, manualName }: { findings: Finding[]; manualName?: string }) {
   const counts = Object.fromEntries(CATEGORIES.map((c) => [c, 0])) as Record<Category, number>;
   for (const f of findings) counts[f.category] += 1;
 
@@ -26,6 +26,7 @@ export default function ResultsView({ findings }: { findings: Finding[] }) {
         <h2 className="font-semibold">검증 결과</h2>
         <p className="text-sm text-slate-500">전체 {findings.length}건</p>
       </div>
+      {manualName && <p className="text-sm text-slate-500">기준 매뉴얼: {manualName}</p>}
 
       <div role="tablist" className="flex flex-wrap gap-2">
         {CATEGORIES.map((c) => (

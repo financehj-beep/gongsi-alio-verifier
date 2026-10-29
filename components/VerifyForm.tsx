@@ -20,13 +20,13 @@ import ProgressSteps, { type StepName, type StepState } from "@/components/Progr
 import ResultsView from "@/components/ResultsView";
 import type { Finding } from "@/lib/types";
 
-// 지금까지 만든 단계. 매뉴얼은 아직 만들지 않아 "준비 중"으로 보인다.
-const BUILT: StepName[] = ["읽기", "비교", "맞춤법"];
+// 네 단계 모두 만들어져 있다
+const BUILT: StepName[] = ["읽기", "비교", "맞춤법", "매뉴얼"];
 
 // 지금 단계 앞은 완료, 지금 단계는 진행 중(또는 실패), 뒤는 대기로 표시한다
 function statesAt(current: StepName | "끝", mode: "active" | "error" | "done" = "active"): Record<StepName, StepState> {
   const at = current === "끝" ? BUILT.length : BUILT.indexOf(current);
-  const states = { 매뉴얼: "unavailable" } as Record<StepName, StepState>;
+  const states = {} as Record<StepName, StepState>;
   BUILT.forEach((step, i) => {
     states[step] = i < at ? "done" : i === at ? mode : "waiting";
   });
@@ -36,6 +36,7 @@ function statesAt(current: StepName | "끝", mode: "active" | "error" | "done" =
 const DETAIL: Partial<Record<StepName, string>> = {
   비교: "웹페이지와 한글파일 비교 중",
   맞춤법: "한글파일 맞춤법 검사 중",
+  매뉴얼: "매뉴얼 규칙 검사 중",
 };
 
 // 지금 상태를 4단계 진행 표시로 바꾼다
@@ -68,7 +69,7 @@ type Status =
   | ({ kind: "pairWarning"; pair: PairCheck } & Texts)
   // 비교·맞춤법 단계 진행 중. 앞 단계에서 찾은 결과를 들고 간다.
   | ({ kind: "running"; step: StepName; findings: Finding[] } & Texts)
-  | ({ kind: "done"; findings: Finding[] } & Texts)
+  | ({ kind: "done"; findings: Finding[]; manualName?: string } & Texts)
   // 실패해도 앞 단계 결과는 유지한다 (DESIGN.md §7 AI 응답 실패)
   | ({ kind: "error"; message: string; step: StepName; findings?: Finding[] } & Partial<Texts>);
 
@@ -140,13 +141,15 @@ export default function VerifyForm() {
     }
   }
 
-  // 2단계 비교 → 3단계 맞춤법을 차례로 부른다. 1단계에서 받은 글자를 단계마다 다시 보낸다
+  // 2단계 비교 → 3단계 맞춤법 → 4단계 매뉴얼을 차례로 부른다. 1단계에서 받은 글자를 단계마다 다시 보낸다
   // (DESIGN.md §3 단계 사이에 글자를 넘기는 방법)
   async function compare(texts: Texts) {
     const steps: { step: StepName; url: string; body: object }[] = [
       { step: "비교", url: "/api/verify/compare", body: texts },
       { step: "맞춤법", url: "/api/verify/spelling", body: { hwp: texts.hwp } },
+      { step: "매뉴얼", url: "/api/verify/manual", body: { hwp: texts.hwp } },
     ];
+    let manualName: string | undefined;
     let findings: Finding[] = [];
     for (const { step, url, body } of steps) {
       setStatus({ kind: "running", step, findings, ...texts });
@@ -156,18 +159,21 @@ export default function VerifyForm() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-        const data = (await res.json()) as { ok: true; findings: Finding[] } | { ok: false; error: { message: string } };
+        const data = (await res.json()) as
+          | { ok: true; findings: Finding[]; manual?: { fileName: string } }
+          | { ok: false; error: { message: string } };
         if (!data.ok) {
           setStatus({ kind: "error", step, message: data.error.message, findings, ...texts });
           return;
         }
         findings = [...findings, ...data.findings];
+        if (data.manual) manualName = data.manual.fileName;
       } catch {
         setStatus({ kind: "error", step, message: `AI 검사 중 문제가 생겼습니다 (${step} 단계). 다시 시도해 주세요.`, findings, ...texts });
         return;
       }
     }
-    setStatus({ kind: "done", findings, ...texts });
+    setStatus({ kind: "done", findings, manualName, ...texts });
   }
 
   // 짝 확인 경고가 떠 있는 동안에는 먼저 [계속]이나 [취소]를 고르게 한다
@@ -238,7 +244,7 @@ export default function VerifyForm() {
           onCancel={() => setStatus({ kind: "idle" })}
         />
       )}
-      {findings && (status.kind === "done" || findings.length > 0) && <ResultsView findings={findings} />}
+      {findings && (status.kind === "done" || findings.length > 0) && <ResultsView findings={findings} manualName={status.kind === "done" ? status.manualName : undefined} />}
       {texts && status.kind !== "pairWarning" && (
         // 꺼낸 글자는 필요할 때만 펼쳐 본다
         <details className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
