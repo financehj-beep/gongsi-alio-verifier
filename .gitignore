@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 시험용 .hwp 샘플(개인 문서일 수 있어 올리지 않는다)
+samples/*.hwp

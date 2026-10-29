@@ -4,6 +4,7 @@ import path from "node:path";
 import { MANUAL_EXTENSIONS, MAX_FILE_BYTES, extensionOf } from "@/lib/limits";
 import { parseManualLines, type ManualLine } from "@/lib/manual/parse";
 import { manualFail, type ManualReadResult } from "@/lib/manual/types";
+import { readHwp } from "@/lib/readers/hwp";
 import { readHwpx } from "@/lib/readers/hwpx";
 import { readPdfLines } from "@/lib/readers/pdf";
 
@@ -15,7 +16,7 @@ const MIN_LETTERS = 20;
 
 function finish(
   fileName: string,
-  format: "pdf" | "hwpx",
+  format: "pdf" | "hwp" | "hwpx",
   lines: ManualLine[],
   pageCount: number | undefined,
   pageKnown: boolean,
@@ -38,18 +39,17 @@ export async function readManualFile(fileName: string, bytes: Uint8Array): Promi
     return finish(fileName, "pdf", pdf.lines, pdf.pageCount, true);
   }
 
-  if (ext === ".hwpx") {
-    const hwp = await readHwpx(bytes);
+  if (ext === ".hwpx" || ext === ".hwp") {
+    const hwp = ext === ".hwp" ? await readHwp(bytes) : await readHwpx(bytes);
     if (!hwp.ok) {
       // 한글파일 읽기의 오류를 매뉴얼 안내 문구로 바꾼다
       const code = hwp.error.code;
       return manualFail(code === "encrypted" ? "encrypted" : code === "distribution" ? "distribution" : code === "empty" ? "empty" : "damaged");
     }
     const lines = hwp.doc.paragraphs.flatMap((p) => p.text.split("\n").map((text) => ({ text, page: p.location.page })));
-    return finish(fileName, "hwpx", lines, hwp.doc.pageCount, hwp.doc.pageKnown);
+    return finish(fileName, ext === ".hwp" ? "hwp" : "hwpx", lines, hwp.doc.pageCount, hwp.doc.pageKnown);
   }
 
-  // .hwp는 PLAN.md 9번에서 읽기를 만든 뒤 함께 지원한다
   return manualFail("unsupported");
 }
 

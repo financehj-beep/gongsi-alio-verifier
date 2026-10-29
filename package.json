@@ -10,8 +10,10 @@
   },
   "dependencies": {
     "@vercel/blob": "^2.8.2",
+    "cfb": "^1.2.2",
     "cheerio": "^1.2.0",
     "fast-xml-parser": "^5.11.2",
+    "hwp.js": "^0.0.3",
     "jszip": "^3.10.2",
     "next": "16.4.3",
     "openai": "^7.45.1",

@@ -135,7 +135,7 @@ export default function ManualAdmin() {
           onChange={(e) => void onFile(e.target.files?.[0] ?? null)}
           className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-4 file:py-2 dark:file:bg-slate-800"
         />
-        <p className="text-sm text-slate-500">.hwp·.hwpx·PDF, {formatBytes(MAX_FILE_BYTES)}까지. 지금은 .hwpx와 PDF만 읽을 수 있어요.</p>
+        <p className="text-sm text-slate-500">.hwp·.hwpx·PDF, {formatBytes(MAX_FILE_BYTES)}까지. .hwp·.hwpx·PDF 모두 읽을 수 있어요.</p>
         {busy && <p className="text-sm text-sky-700 dark:text-sky-300">{busy}</p>}
         {message && (
           <p role="status" className={`text-sm ${message.kind === "error" ? "text-red-600" : "text-emerald-700 dark:text-emerald-300"}`}>

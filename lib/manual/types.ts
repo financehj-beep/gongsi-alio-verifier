@@ -16,7 +16,7 @@ export type ManualClause = {
 
 export type ManualDoc = {
   fileName: string;
-  format: "pdf" | "hwpx";
+  format: "pdf" | "hwp" | "hwpx";
   clauses: ManualClause[];
   // 조항 번호(제N장 N.M, 제N조)를 알아볼 수 있었는지. 아니면 문단 순서로 나눈다.
   structured: boolean;
@@ -38,7 +38,7 @@ export const MANUAL_ERRORS: Record<ManualReadError["code"], string> = {
   distribution: "복사가 막힌 배포용 문서입니다. 일반 문서로 저장해 올려 주세요.",
   damaged: "파일이 손상되어 열 수 없습니다. 다시 받은 파일을 올려 주세요.",
   empty: "매뉴얼에서 글자를 찾지 못했습니다 (스캔 이미지 PDF 등). 글자가 들어 있는 파일을 올려 주세요.",
-  unsupported: "아직 읽을 수 없는 매뉴얼 형식입니다 (.hwp는 준비 중). .hwpx나 PDF로 저장해 올려 주세요.",
+  unsupported: "읽을 수 없는 매뉴얼 형식입니다. .hwpx나 PDF로 저장해 올려 주세요.",
 };
 
 export type ManualReadResult = { ok: true; manual: ManualDoc } | { ok: false; error: ManualReadError };
