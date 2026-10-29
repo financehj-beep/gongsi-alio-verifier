@@ -160,14 +160,14 @@ export default function VerifyForm() {
           body: JSON.stringify(body),
         });
         const data = (await res.json()) as
-          | { ok: true; findings: Finding[]; manual?: { fileName: string } }
+          | { ok: true; findings: Finding[]; manual?: { fileName: string; replacedAt?: string } }
           | { ok: false; error: { message: string } };
         if (!data.ok) {
           setStatus({ kind: "error", step, message: data.error.message, findings, ...texts });
           return;
         }
         findings = [...findings, ...data.findings];
-        if (data.manual) manualName = data.manual.fileName;
+        if (data.manual) manualName = `${data.manual.fileName}${data.manual.replacedAt ? ` (${data.manual.replacedAt.slice(0, 10)} 교체)` : ""}`;
       } catch {
         setStatus({ kind: "error", step, message: `AI 검사 중 문제가 생겼습니다 (${step} 단계). 다시 시도해 주세요.`, findings, ...texts });
         return;

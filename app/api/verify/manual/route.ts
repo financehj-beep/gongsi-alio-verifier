@@ -1,5 +1,5 @@
 import { checkManualRules } from "@/lib/ai/manual-check";
-import { loadDefaultManual } from "@/lib/manual/load";
+import { loadCurrentManual } from "@/lib/manual/store";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 
 // Design Ref: DESIGN.md §6 4단계 매뉴얼 검사 — 화면이 보낸 한글파일 글자와 현재 매뉴얼로 규칙 위반 결과를 돌려준다
@@ -26,13 +26,15 @@ export async function POST(request: Request) {
     return fail(400, "요청 형식이 올바르지 않습니다.");
   }
 
-  // 현재 매뉴얼. 매뉴얼 보관·교체(PLAN 19·20번)를 만들기 전까지는 앱에 넣어 둔 기본 매뉴얼을 쓴다.
-  const loaded = await loadDefaultManual().catch(() => null);
-  if (!loaded?.ok) return fail(500, loaded ? loaded.error.message : "기준 매뉴얼을 읽지 못했습니다.");
+  // 현재 매뉴얼 (보관함에서 꺼낸다. 보관함이 없으면 앱에 넣어 둔 샘플)
+  const current = await loadCurrentManual().catch(() => null);
+  if (!current) return fail(500, "기준 매뉴얼을 읽지 못했습니다.");
+  if (!current.result.ok) return fail(500, current.result.error.message);
+  const loaded = current.result;
 
   try {
     const findings = await checkManualRules(hwp, loaded.manual);
-    return Response.json({ ok: true, findings, manual: { fileName: loaded.manual.fileName } });
+    return Response.json({ ok: true, findings, manual: { fileName: loaded.manual.fileName, replacedAt: current.replacedAt } });
   } catch {
     return fail(502, "AI 검사 중 문제가 생겼습니다 (매뉴얼 단계). 다시 시도해 주세요.");
   }
