@@ -4,6 +4,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { getOpenAI, modelName, reasoningOption } from "@/lib/ai/client";
 import { assertChunkCount, assertCounts, mapLimit } from "@/lib/ai/pool";
 import { findNumberMismatch, sameIgnoringSpaces } from "@/lib/checks/numbers";
+import { classifyTypos } from "@/lib/checks/typo";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 import type { WebPage } from "@/lib/readers/web";
 import type { Finding, ImageLocation, WebLocation } from "@/lib/types";
@@ -98,7 +99,8 @@ function webItems(page: WebPage): WItem[] {
 
 // ① 글자가 똑같은 짝을 코드로 먼저 찾는다.
 // 한글파일 한 문단이 웹페이지 여러 문장으로 나뉜 경우(연속된 W를 이으면 같음)도 찾는다.
-function exactMatches(hs: HItem[], ws: WItem[]): { matchedH: Set<string>; matchedW: Set<string> } {
+function exactMatches(hs: HItem[], ws: WItem[]): { matchedH: Set<string>; matchedW: Set<string>; spacing: { h: HItem; w: WItem }[] } {
+  const spacing: { h: HItem; w: WItem }[] = [];
   const matchedH = new Set<string>();
   const matchedW = new Set<string>();
   const byText = new Map<string, WItem[]>();
@@ -114,6 +116,8 @@ function exactMatches(hs: HItem[], ws: WItem[]): { matchedH: Set<string>; matche
     if (candidate) {
       matchedH.add(h.id);
       matchedW.add(candidate.id);
+      // 글자는 같은데 띄어쓰기가 다르면 알린다. 이미지 글자는 띄어쓰기를 믿기 어려워 뺀다.
+      if (!h.image && !candidate.image && classifyTypos(h.text, candidate.text).includes("띄어쓰기")) spacing.push({ h, w: candidate });
     }
   }
 
@@ -137,7 +141,7 @@ function exactMatches(hs: HItem[], ws: WItem[]): { matchedH: Set<string>; matche
       }
     }
   }
-  return { matchedH, matchedW };
+  return { matchedH, matchedW, spacing };
 }
 
 function chunk(items: HItem[]): HItem[][] {
@@ -251,10 +255,32 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
   const hById = new Map(hs.map((h) => [h.id, h]));
   const wById = new Map(ws.map((w) => [w.id, w]));
 
-  const { matchedH, matchedW } = exactMatches(hs, ws);
+  const hwpLoc = (h: HItem) => (h.index >= 0 ? doc.paragraphs[h.index].location : undefined);
+  // 이미지에서 읽은 문장이 낀 결과는 출처를 "이미지"로 표시하고, 글자를 또렷하게 읽지 못했으면 확인 필요로 바꾼다
+  const origin = (h: HItem | undefined, ws: WItem[]) => {
+    const images = [h?.image, ...ws.map((w) => w.image)].filter((i): i is ImageInfo => Boolean(i));
+    return {
+      source: images.length > 0 ? ("이미지" as const) : ("본문" as const),
+      imageLocation: images[0]?.location,
+      unclear: images.some((i) => !i.clear),
+    };
+  };
+
+  const { matchedH, matchedW, spacing } = exactMatches(hs, ws);
+  // 글자는 같고 띄어쓰기만 다른 짝은 AI 없이 코드가 바로 알린다
+  const spacingFindings: Finding[] = spacing.map(({ h, w }) => ({
+    category: "불일치",
+    source: "본문",
+    hwpLocation: hwpLoc(h),
+    webLocation: w.location,
+    hwpText: h.text,
+    webText: w.text,
+    typoKinds: ["띄어쓰기"],
+    explanation: "글자는 같지만 띄어쓰기가 다릅니다.",
+  }));
   const restH = hs.filter((h) => !matchedH.has(h.id));
   const restW = ws.filter((w) => !matchedW.has(w.id));
-  if (restH.length === 0 && restW.length === 0) return [];
+  if (restH.length === 0 && restW.length === 0) return spacingFindings;
 
   // 남은 한글파일 문장이 없으면 AI 없이 웹페이지 쪽 누락으로 바로 처리할 수도 있지만,
   // 메뉴 같은 본문 아닌 문장을 거르기 위해 AI에게 한 번 묻는다
@@ -279,16 +305,6 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
   const pairedH = new Set<string>();
   const flaggedH = new Set<string>();
   const flaggedW = new Set<string>();
-  const hwpLoc = (h: HItem) => (h.index >= 0 ? doc.paragraphs[h.index].location : undefined);
-  // 이미지에서 읽은 문장이 낀 결과는 출처를 "이미지"로 표시하고, 글자를 또렷하게 읽지 못했으면 확인 필요로 바꾼다
-  const origin = (h: HItem | undefined, ws: WItem[]) => {
-    const images = [h?.image, ...ws.map((w) => w.image)].filter((i): i is ImageInfo => Boolean(i));
-    return {
-      source: images.length > 0 ? ("이미지" as const) : ("본문" as const),
-      imageLocation: images[0]?.location,
-      unclear: images.some((i) => !i.clear),
-    };
-  };
 
   for (const answer of answers) {
     for (const pair of answer.pairs) {
@@ -319,9 +335,27 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
         });
         continue;
       }
-      if (pair.verdict === "같음" || sameIgnoringSpaces(h.text, webText)) continue;
+      if (pair.verdict === "같음" || sameIgnoringSpaces(h.text, webText)) {
+        // 띄어쓰기만 다른 경우도 알린다 (한 문장끼리 짝지어진 경우만, 이미지 글자는 제외)
+        if (wList.length === 1 && !h.image && !wList[0].image && classifyTypos(h.text, webText).includes("띄어쓰기")) {
+          findings.push({
+            category: "불일치",
+            source: "본문",
+            hwpLocation: hwpLoc(h),
+            webLocation,
+            hwpText: h.text,
+            webText,
+            typoKinds: ["띄어쓰기"],
+            explanation: "글자는 같지만 띄어쓰기가 다릅니다.",
+          });
+        }
+        continue;
+      }
+      // 한두 글자만 다르면 오자, 한두 글자가 빠지거나 더해졌으면 탈자로 나눠 표시한다
+      const typoKinds = pair.verdict === "다름" && !o.unclear ? classifyTypos(h.text, webText) : [];
       findings.push({
         category: pair.verdict === "다름" && !o.unclear ? "불일치" : "확인 필요",
+        ...(typoKinds.length > 0 ? { typoKinds } : {}),
         source: o.source,
         imageLocation: o.imageLocation,
         hwpLocation: hwpLoc(h),
@@ -427,5 +461,5 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
     }
   }
 
-  return findings;
+  return [...spacingFindings, ...findings];
 }

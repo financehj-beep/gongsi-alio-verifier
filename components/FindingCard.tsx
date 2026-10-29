@@ -58,6 +58,11 @@ export default function FindingCard({ finding, number }: { finding: Finding; num
       <header className="flex flex-wrap items-center gap-2">
         <span className="font-semibold text-slate-500">#{number}</span>
         <span className={`rounded px-2 py-0.5 text-xs font-semibold ${BADGE[f.category]}`}>{f.category}</span>
+        {f.typoKinds?.map((k) => (
+          <span key={k} className="rounded bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700 dark:bg-rose-950 dark:text-rose-200">
+            {k}
+          </span>
+        ))}
         {f.source === "이미지" && (
           <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-semibold dark:bg-slate-700">이미지</span>
         )}

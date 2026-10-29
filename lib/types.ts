@@ -1,5 +1,7 @@
 // Design Ref: DESIGN.md §5 — 모든 검사 단계가 함께 쓰는 결과 데이터 모양
 
+import type { TypoKind } from "@/lib/checks/typo";
+
 // 결과 카테고리는 5개로 고정한다 (PRD.md 5번)
 export const CATEGORIES = ["불일치", "누락", "확인 필요", "맞춤법", "규칙 위반"] as const;
 export type Category = (typeof CATEGORIES)[number];
@@ -35,6 +37,8 @@ export type Finding = {
   imageLocation?: ImageLocation;
   // 누락일 때만: 내용이 없는 쪽
   missingSide?: "한글파일" | "웹페이지";
+  // 불일치일 때만: 글자 차이의 종류 (오자·탈자·띄어쓰기). 문구가 크게 다르면 비워 둔다.
+  typoKinds?: TypoKind[];
   // 문장은 원문 그대로. 해당 쪽에 내용이 없으면 비워 둔다.
   hwpText?: string;
   webText?: string;

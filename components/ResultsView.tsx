@@ -3,6 +3,10 @@
 import { useState } from "react";
 import FindingCard from "@/components/FindingCard";
 import { CATEGORIES, type Category, type Finding } from "@/lib/types";
+import type { TypoKind } from "@/lib/checks/typo";
+
+// 불일치 탭에서 글자 차이 종류로 걸러 볼 때 쓰는 꼬리표
+const TYPO_KINDS: TypoKind[] = ["오자", "탈자", "띄어쓰기"];
 
 export const PAGE_SIZE = 20;
 
@@ -14,8 +18,12 @@ export default function ResultsView({ findings, manualName }: { findings: Findin
   // 처음에는 건수가 있는 첫 번째 탭을 연다
   const [tab, setTab] = useState<Category>(CATEGORIES.find((c) => counts[c] > 0) ?? CATEGORIES[0]);
   const [page, setPage] = useState(1);
+  const [kind, setKind] = useState<TypoKind | null>(null);
 
-  const list = findings.filter((f) => f.category === tab);
+  const inTab = findings.filter((f) => f.category === tab);
+  const kindCounts = Object.fromEntries(TYPO_KINDS.map((k) => [k, inTab.filter((f) => f.typoKinds?.includes(k)).length])) as Record<TypoKind, number>;
+  const activeKind = tab === "불일치" ? kind : null;
+  const list = activeKind ? inTab.filter((f) => f.typoKinds?.includes(activeKind)) : inTab;
   const pageCount = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
   const current = Math.min(page, pageCount);
   const shown = list.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
@@ -37,6 +45,7 @@ export default function ResultsView({ findings, manualName }: { findings: Findin
             onClick={() => {
               setTab(c);
               setPage(1);
+              setKind(null);
             }}
             className={`rounded-full px-3 py-1.5 text-sm font-semibold ${
               tab === c
@@ -48,6 +57,27 @@ export default function ResultsView({ findings, manualName }: { findings: Findin
           </button>
         ))}
       </div>
+
+      {tab === "불일치" && TYPO_KINDS.some((k) => kindCounts[k] > 0) && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-slate-500">글자 차이 종류</span>
+          {[null, ...TYPO_KINDS].map((k) => (
+            <button
+              key={k ?? "전체"}
+              aria-pressed={activeKind === k}
+              onClick={() => {
+                setKind(k);
+                setPage(1);
+              }}
+              className={`rounded-full border px-2.5 py-1 ${
+                activeKind === k ? "border-slate-900 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900" : "border-slate-300 text-slate-700 dark:border-slate-700 dark:text-slate-300"
+              }`}
+            >
+              {k ? `${k} ${kindCounts[k]}` : `전체 ${inTab.length}`}
+            </button>
+          ))}
+        </div>
+      )}
 
       {list.length === 0 ? (
         <p className="rounded-lg bg-slate-50 p-6 text-center text-sm text-slate-500 dark:bg-slate-950">
