@@ -17,7 +17,7 @@ export default function PairWarning({
       className="space-y-4 rounded-xl border-2 border-amber-400 bg-amber-50 p-6 text-sm dark:border-amber-600 dark:bg-amber-950"
     >
       <h2 id="pair-warning-title" className="text-base font-bold text-amber-900 dark:text-amber-100">
-        서로 다른 공고로 보입니다. 계속할까요?
+        {pair.thin ? "웹페이지에 공고 본문이 거의 없습니다. 계속할까요?" : "서로 다른 공고로 보입니다. 계속할까요?"}
       </h2>
       <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1 text-amber-900 dark:text-amber-100">
         <dt className="font-semibold">한글파일 제목</dt>
@@ -34,10 +34,21 @@ export default function PairWarning({
         )}
         <dt className="font-semibold">겹치는 낱말</dt>
         <dd>{Math.round(pair.overlap * 100)}% (같은 공고라면 보통 35% 이상)</dd>
+        <dt className="font-semibold">글자 수</dt>
+        <dd>
+          한글파일 {pair.hwpChars.toLocaleString()}자 / 웹페이지 {pair.webChars.toLocaleString()}자
+        </dd>
       </dl>
-      <p className="text-amber-800 dark:text-amber-200">
-        짝이 틀리면 거의 모든 문장이 &lsquo;불일치&rsquo;로 나옵니다. URL과 한글파일이 같은 공고인지 확인해 주세요.
-      </p>
+      {pair.thin ? (
+        <p className="text-amber-800 dark:text-amber-200">
+          입력한 주소가 공고 본문이 아니라 기관 소개·목록 페이지일 수 있습니다. &lsquo;채용 바로가기&rsquo;나 공고 제목을 눌러 열리는 <strong>공고 상세 페이지 주소</strong>를 넣어 주세요.
+          그대로 계속하면 한글파일의 대부분이 &lsquo;누락&rsquo;으로 나오고 AI 사용량도 늘어납니다.
+        </p>
+      ) : (
+        <p className="text-amber-800 dark:text-amber-200">
+          짝이 틀리면 거의 모든 문장이 &lsquo;불일치&rsquo;로 나옵니다. URL과 한글파일이 같은 공고인지 확인해 주세요.
+        </p>
+      )}
       <div className="flex justify-end gap-2">
         <button
           type="button"

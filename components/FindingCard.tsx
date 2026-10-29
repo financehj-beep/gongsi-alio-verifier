@@ -101,7 +101,7 @@ export default function FindingCard({ finding, number }: { finding: Finding; num
 
       {f.moreLocations && f.moreLocations.length > 0 && (
         <details className="text-slate-600 dark:text-slate-400">
-          <summary className="cursor-pointer">같은 오류가 {f.moreLocations.length}곳 더 있습니다</summary>
+          <summary className="cursor-pointer">{f.category === "누락" ? `같은 표에서 함께 빠진 줄 ${f.moreLocations.length}개 보기` : `같은 오류가 ${f.moreLocations.length}곳 더 있습니다`}</summary>
           <ul className="mt-2 space-y-1">
             {f.moreLocations.map((m, i) => (
               <li key={i}>

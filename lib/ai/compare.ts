@@ -66,8 +66,30 @@ const norm = (s: string) => s.replace(/\s+/g, "");
 // AI가 번호 뒤에 설명을 붙여 돌려줘도 맨 앞 번호(H12, W5)만 쓴다
 const idOf = (value: string) => value.trim().match(/^[HW]\d+/)?.[0] ?? value.trim();
 
+// 표의 같은 행에 있는 짧은 칸들(항목 이름 칸 + 값 칸)은 한 줄로 묶어 비교한다.
+// 웹페이지는 "접수 기간 2026.11.03 ~ 2026.11.20"처럼 한 문장인데 한글파일은 칸마다 나뉘어 있어, 칸 단위로 비교하면 거의 모든 칸이 짝이 없는 것으로 나오기 때문이다.
+const MAX_MERGE_CELL_CHARS = 40;
+function mergeRows(doc: HwpDocument): { text: string; index: number }[] {
+  const rows: { text: string; index: number; short: boolean }[] = [];
+  let last: { table: number; row: number } | null = null;
+  doc.paragraphs.forEach((p, i) => {
+    const text = p.text.replace(/\n/g, " ");
+    const short = text.length <= MAX_MERGE_CELL_CHARS;
+    const t = p.location.table;
+    const prev = rows[rows.length - 1];
+    // 같은 표·같은 행이고, 이번 칸과 앞서 묶인 칸이 모두 짧을 때만 한 줄로 잇는다 (긴 글은 따로 비교)
+    if (t && last && last.table === t.index && last.row === t.row && prev?.short && short) {
+      prev.text += ` ${text}`;
+    } else {
+      rows.push({ text, index: i, short });
+    }
+    last = t ? { table: t.index, row: t.row } : null;
+  });
+  return rows;
+}
+
 function hwpItems(doc: HwpDocument): HItem[] {
-  const out: HItem[] = doc.paragraphs.map((p, i) => ({ id: `H${i + 1}`, text: p.text.replace(/\n/g, " "), index: i }));
+  const out: HItem[] = mergeRows(doc).map((r, i) => ({ id: `H${i + 1}`, text: r.text, index: r.index }));
   for (const img of doc.imageTexts ?? []) {
     for (const line of img.lines) {
       out.push({ id: `H${out.length + 1}`, text: line.text, index: -1, image: { location: { side: "한글파일", index: img.index, area: line.area }, clear: line.clear } });
@@ -421,6 +443,42 @@ async function recheckMissing(
   return out;
 }
 
+// 같은 표에서 웹페이지에 없다고 나온 줄이 여러 개면 한 카드로 묶는다 (카드 수가 폭증해 읽기 어려워지는 것을 막는다).
+// 묶인 줄의 위치와 글자는 모두 카드 안에 남긴다 (PRD.md: 결과는 빠짐없이 보여준다).
+const GROUP_MIN = 3;
+function groupTableMissing(findings: Finding[]): Finding[] {
+  const isTableMissing = (f: Finding) => f.category === "누락" && f.missingSide === "웹페이지" && f.source === "본문" && f.hwpLocation?.table;
+  const byTable = new Map<number, Finding[]>();
+  for (const f of findings) {
+    if (!isTableMissing(f)) continue;
+    const idx = f.hwpLocation!.table!.index;
+    byTable.set(idx, [...(byTable.get(idx) ?? []), f]);
+  }
+  const grouped = new Set<number>([...byTable].filter(([, list]) => list.length >= GROUP_MIN).map(([idx]) => idx));
+  if (grouped.size === 0) return findings;
+
+  const out: Finding[] = [];
+  const done = new Set<number>();
+  for (const f of findings) {
+    const idx = isTableMissing(f) ? f.hwpLocation!.table!.index : undefined;
+    if (idx === undefined || !grouped.has(idx)) {
+      out.push(f);
+      continue;
+    }
+    if (done.has(idx)) continue;
+    done.add(idx);
+    const list = byTable.get(idx)!;
+    const preview = list.slice(0, 3).map((x) => x.hwpText).join(" / ");
+    out.push({
+      ...list[0],
+      hwpText: list.length > 3 ? `${preview} …` : preview,
+      moreLocations: list.slice(1).map((x) => ({ hwpLocation: x.hwpLocation!, hwpText: x.hwpText ?? "" })),
+      explanation: `표 ${idx}에서 ${list.length}개 줄이 웹페이지에 없습니다. 같은 표의 줄을 한 카드로 묶었으니, 아래 목록에서 모두 확인해 주세요.`,
+    });
+  }
+  return out;
+}
+
 // 비교 단계 전체에 쓸 수 있는 시간 (서버 기능 제한 60초보다 여유 있게). 넘기면 뒤쪽 확인 단계는 건너뛴다.
 const COMPARE_BUDGET_MS = 40_000;
 
@@ -649,5 +707,5 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
 
   // ④ 누락 후보는 문장 하나만 보지 않고 문서 전체 맥락으로 한 번 더 판단한다
   const finalFindings = await recheckMissing(hs, ws, findings, missingIds, { hwpLoc, origin, hById, wById }, deadlineAt);
-  return [...spacingFindings, ...finalFindings];
+  return [...spacingFindings, ...groupTableMissing(finalFindings)];
 }
