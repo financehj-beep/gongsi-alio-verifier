@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { getOpenAI, modelName, reasoningOption } from "@/lib/ai/client";
-import { assertChunkCount, assertCounts, mapLimit } from "@/lib/ai/pool";
+import { MAX_AI_CHUNKS, assertChunkCount, assertCounts, mapLimit } from "@/lib/ai/pool";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 import type { Finding } from "@/lib/types";
 
@@ -32,6 +32,11 @@ const INSTRUCTIONS = `너는 한국어 맞춤법 검사기다. 공공기관 공�
 2. 찾아야 하는 것:
    - 잘못 쓴 글자와 오타 (예: 검검→점검, 됬습니다→되었습니다, 드릴께요→드릴게요)
    - 표준어가 아닌 말 (예: 몇일→며칠, 금새→금세, 반듯이(꼭의 뜻)→반드시)
+   - 헷갈리기 쉬운 말 (예: 되/돼, 안/않, 로서/로써, 부치다/붙이다, 개재/게재, 바램→바람, 왠만하면→웬만하면, 어떻해→어떻게, 합격율→합격률(받침 없는 말이나 ㄴ 받침 뒤는 '률'), 갯수→개수, 윗층→위층, 안되→안 되)
+   - 어미·조사 잘못 (예: 일할려고→일하려고, 드릴께요→드릴게요, 할 수 있슴→있음)
+   - 외래어 표기법에 어긋난 것 (예: 컨텐츠→콘텐츠, 쥬스→주스)
+   - 하다·되다를 앞말과 띄어 쓴 것 (예: 가능 합니다→가능합니다, 통보 됩니다→통보됩니다, 취소 되며→취소되며, 조정 할→조정할)
+   - 서술격 조사 '이다'를 앞말과 띄어 쓴 것 (예: 6시까지 입니다→6시까지입니다)
    - 의존 명사를 앞말에 붙여 쓴 것 (이상, 이하, 이내, 시(때), 등, 외, 간, 것, 수, 바, 데, 만큼, 뿐, 지) (예: 대졸이상→대졸 이상, 발생시→발생 시)
 3. 찾지 말아야 하는 것 (허용되는 표기):
    - 낱말을 이어 쓴 명사 묶음과 전문 용어 (예: 실행관리, 해외고객사, 사출공정, 원가관련, 업무경력자). 한글 맞춤법 제50항에 따라 붙여 써도 된다.
@@ -87,7 +92,9 @@ export async function checkSpelling(doc: HwpDocument): Promise<Finding[]> {
   assertChunkCount(chunks.length);
 
   // 모양이 틀린 답은 한 번 더 요청한다 (DESIGN.md §1). 동시 호출 수는 제한한다.
-  const answers = await mapLimit(chunks, async (c) => {
+  // 같은 묶음을 두 번 검사해 합친다(조각 수 상한 안에서만). 한 번만 보면 AI가 가끔 지나치는 오류를 잡기 위해서다.
+  // 오류로 오인하는 것은 아래에서 문장에 실제로 있는 글자인지 확인하고, 같은 오류는 한 번만 센다.
+  const answers = await mapLimit(chunks.length * 2 <= MAX_AI_CHUNKS ? [...chunks, ...chunks] : chunks, async (c) => {
     try {
       return await askChunk(c);
     } catch {
