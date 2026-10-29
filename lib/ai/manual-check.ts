@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { getOpenAI, modelName, reasoningOption } from "@/lib/ai/client";
-import { assertChunkCount, assertCounts, mapLimit } from "@/lib/ai/pool";
+import { TooLongError, assertChunkCount, assertCounts, mapLimit } from "@/lib/ai/pool";
 import type { ManualClause, ManualDoc } from "@/lib/manual/types";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 import type { Finding } from "@/lib/types";
@@ -16,7 +16,9 @@ const CHUNK_CHARS = 5000;
 // 한 번에 보내는 매뉴얼 글자 한도. 이보다 길면 한글파일 조각과 관련 있는 조항만 골라 보낸다 (DESIGN.md §3 AI 입력 한도)
 const MANUAL_CHARS = 40000;
 // 두 번째 검사를 시작할 수 있는 마감 (검사 시작 후 이 시간이 지나면 건너뛴다)
-const SECOND_PASS_BUDGET_MS = 25_000;
+const SECOND_PASS_BUDGET_MS = 15_000;
+// 매뉴얼 검사에서 받을 수 있는 한글파일 조각 수 상한
+const MAX_MANUAL_CHUNKS = 8;
 
 const AnswerSchema = z.object({
   violations: z.array(
@@ -222,6 +224,9 @@ export async function checkManualRules(doc: HwpDocument, manual: ManualDoc): Pro
   const deadlineAt = Date.now() + SECOND_PASS_BUDGET_MS;
   const jobs = [...chunks.map((c) => ({ c, second: false })), ...chunks.map((c) => ({ c, second: true }))];
   assertChunkCount(jobs.length / 2);
+  // 첫 번째 검사만으로도 조각 한 번에 약 20초가 걸려, 8조각(약 4만 자)을 넘으면 서버 기능 제한 60초를 넘길 수 있다.
+  // 일부만 검사한 채 끝내지 않고, 처음부터 너무 길다고 알린다.
+  if (chunks.length > MAX_MANUAL_CHUNKS) throw new TooLongError();
   // 공시 항목에 해당하는 장과 공통 장의 조항만 검사에 쓴다
   const scope = await pickScope(clauses, items);
   const answers = await mapLimit(jobs, async ({ c, second }) => {
