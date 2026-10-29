@@ -55,6 +55,10 @@ function imageKind(data: Uint8Array): string | null {
   return null;
 }
 
+// 그림 한 장이 풀린 뒤 최대 크기, 한글파일 한 개에서 다루는 그림의 최대 개수
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+const MAX_IMAGES = 50;
+
 function binDataImages(bytes: Uint8Array): { path: string; mime: string; data: Uint8Array }[] {
   try {
     const cfb = CFB.read(bytes, { type: "buffer" });
@@ -68,7 +72,8 @@ function binDataImages(bytes: Uint8Array): { path: string; mime: string; data: U
       let mime = imageKind(rawBytes);
       if (!mime) {
         try {
-          data = new Uint8Array(inflateRawSync(rawBytes));
+          // 풀린 크기에 한도를 둬서 압축 폭탄을 막는다
+          data = new Uint8Array(inflateRawSync(rawBytes, { maxOutputLength: MAX_IMAGE_BYTES }));
           mime = imageKind(data);
         } catch {
           // 풀리지 않는 칸은 그림이 아니다
@@ -76,7 +81,7 @@ function binDataImages(bytes: Uint8Array): { path: string; mime: string; data: U
       }
       if (mime) out.push({ path: full.replace(/^.*?\/BinData\//i, "BinData/"), mime, data });
     });
-    return out.sort((a, b) => a.path.localeCompare(b.path));
+    return out.sort((a, b) => a.path.localeCompare(b.path)).slice(0, MAX_IMAGES);
   } catch {
     return [];
   }

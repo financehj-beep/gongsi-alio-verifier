@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { getOpenAI, modelName, reasoningOption } from "@/lib/ai/client";
+import { assertChunkCount, assertCounts, mapLimit } from "@/lib/ai/pool";
 import { findNumberMismatch, sameIgnoringSpaces } from "@/lib/checks/numbers";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 import type { WebPage } from "@/lib/readers/web";
@@ -243,6 +244,8 @@ async function askChunk(hs: HItem[], ws: WItem[]): Promise<Answer> {
 }
 
 export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Finding[]> {
+  // 문단·문장 수가 비정상적으로 많으면 짝 맞추기(제곱 계산)와 AI 호출이 폭증하므로 먼저 멈춘다
+  assertCounts(doc.paragraphs.length, page.blocks.reduce((n, b) => n + b.sentences.length + 1, 0));
   const hs = hwpItems(doc);
   const ws = webItems(page);
   const hById = new Map(hs.map((h) => [h.id, h]));
@@ -256,16 +259,15 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
   // 남은 한글파일 문장이 없으면 AI 없이 웹페이지 쪽 누락으로 바로 처리할 수도 있지만,
   // 메뉴 같은 본문 아닌 문장을 거르기 위해 AI에게 한 번 묻는다
   const chunks = restH.length > 0 ? chunk(restH) : [[]];
-  // 모양이 틀린 답은 한 번 더 요청한다 (DESIGN.md §1)
-  const answers = await Promise.all(
-    chunks.map(async (c) => {
-      try {
-        return await askChunk(c, restW);
-      } catch {
-        return askChunk(c, restW);
-      }
-    }),
-  );
+  assertChunkCount(chunks.length);
+  // 모양이 틀린 답은 한 번 더 요청한다 (DESIGN.md §1). 동시 호출 수는 제한한다.
+  const answers = await mapLimit(chunks, async (c) => {
+    try {
+      return await askChunk(c, restW);
+    } catch {
+      return askChunk(c, restW);
+    }
+  });
 
   // 글자가 너무 길어 AI에게 일부만 보여 준 경우, "없다"는 판정을 믿을 수 없으므로 누락 대신 확인 필요로 내보낸다
   const charsOf = (items: { text: string }[]) => items.reduce((n, i) => n + i.text.length + 8, 0);

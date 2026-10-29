@@ -1,3 +1,4 @@
+import { TooLongError, TOO_LONG_MESSAGE } from "@/lib/ai/pool";
 import { checkSpelling } from "@/lib/ai/spelling";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 
@@ -27,7 +28,8 @@ export async function POST(request: Request) {
 
   try {
     return Response.json({ ok: true, findings: await checkSpelling(hwp) });
-  } catch {
+  } catch (error) {
+    if (error instanceof TooLongError) return fail(413, TOO_LONG_MESSAGE);
     return fail(502, "AI 검사 중 문제가 생겼습니다 (맞춤법 단계). 다시 시도해 주세요.");
   }
 }

@@ -55,8 +55,8 @@ export async function POST(request: Request) {
     await deleteUpload(pathname);
     return Response.json({ ok: true, version });
   } catch {
-    // 예상 못 한 오류가 나도 올린 파일은 남기지 않는다
-    if (action === "preview") await deleteUpload(pathname);
+    // 예상 못 한 오류가 나도 올린 파일은 남기지 않는다 (다시 하려면 새로 올리면 된다)
+    await deleteUpload(pathname);
     return fail(500, "매뉴얼을 처리하지 못했습니다. 현재 매뉴얼은 그대로입니다. 잠시 후 다시 시도해 주세요.");
   }
 }

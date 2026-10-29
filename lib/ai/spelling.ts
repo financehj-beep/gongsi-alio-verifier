@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { getOpenAI, modelName, reasoningOption } from "@/lib/ai/client";
+import { assertChunkCount, assertCounts, mapLimit } from "@/lib/ai/pool";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 import type { Finding } from "@/lib/types";
 
@@ -76,23 +77,23 @@ async function askChunk(items: HItem[]) {
 }
 
 export async function checkSpelling(doc: HwpDocument): Promise<Finding[]> {
+  assertCounts(doc.paragraphs.length);
   const items: HItem[] = doc.paragraphs.map((p, i) => ({ id: `H${i + 1}`, text: p.text.replace(/\n/g, " "), index: i }));
   // AI가 번호 뒤에 설명을 붙여 돌려줘도 맨 앞 번호(H12)만 쓴다
   const idOf = (value: string) => value.trim().match(/^H\d+/)?.[0] ?? value.trim();
   const byId = new Map(items.map((h) => [h.id, h]));
   const chunks = chunk(items.filter((h) => /[가-힣]/.test(h.text)));
   if (chunks.length === 0) return [];
+  assertChunkCount(chunks.length);
 
-  // 모양이 틀린 답은 한 번 더 요청한다 (DESIGN.md §1)
-  const answers = await Promise.all(
-    chunks.map(async (c) => {
-      try {
-        return await askChunk(c);
-      } catch {
-        return askChunk(c);
-      }
-    }),
-  );
+  // 모양이 틀린 답은 한 번 더 요청한다 (DESIGN.md §1). 동시 호출 수는 제한한다.
+  const answers = await mapLimit(chunks, async (c) => {
+    try {
+      return await askChunk(c);
+    } catch {
+      return askChunk(c);
+    }
+  });
 
   const findings: Finding[] = [];
   const seen = new Set<string>();

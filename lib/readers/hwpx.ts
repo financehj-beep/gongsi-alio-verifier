@@ -10,6 +10,57 @@ import { hwpFail, type HwpImage, type HwpParagraph, type HwpReadResult } from "@
 // 순서를 지키며 읽는 XML 조각: { 태그이름: [자식들], ":@": { 속성 } } 또는 { "#text": 글자 }
 type XmlNode = Record<string, unknown>;
 
+// 압축 폭탄(작은 파일이 풀리면 거대해지는 파일) 방어: 항목 하나가 풀린 뒤 이 크기를 넘으면 읽기를 멈춘다 (DESIGN.md §8)
+const MAX_ENTRY_BYTES = 50 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 150 * 1024 * 1024;
+// 한글파일 한 개에서 글자를 읽을 그림의 최대 개수
+const MAX_IMAGES = 50;
+
+class TooBigError extends Error {}
+
+// 압축 항목을 조금씩 풀면서 바이트를 세고, 한도를 넘으면 멈춘다
+function readEntry(file: JSZip.JSZipObject, budget: { left: number }): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    // internalStream은 JSZip에 실제로 있지만 타입 정의에는 빠져 있어 모양을 직접 적어 준다
+    const stream = (
+      file as unknown as {
+        internalStream(type: "uint8array"): {
+          on(event: string, handler: (arg: Uint8Array & Error) => void): void;
+          pause(): void;
+          resume(): void;
+        };
+      }
+    ).internalStream("uint8array");
+    stream.on("data", (data) => {
+      size += data.byteLength;
+      budget.left -= data.byteLength;
+      if (size > MAX_ENTRY_BYTES || budget.left < 0) {
+        stream.pause();
+        reject(new TooBigError());
+        return;
+      }
+      chunks.push(data);
+    });
+    stream.on("error", reject);
+    stream.on("end", () => {
+      const out = new Uint8Array(size);
+      let at = 0;
+      for (const c of chunks) {
+        out.set(c, at);
+        at += c.byteLength;
+      }
+      resolve(out);
+    });
+    stream.resume();
+  });
+}
+
+async function readText(file: JSZip.JSZipObject, budget: { left: number }): Promise<string> {
+  return new TextDecoder("utf-8").decode(await readEntry(file, budget));
+}
+
 const parser = new XMLParser({
   preserveOrder: true,
   ignoreAttributes: false,
@@ -61,10 +112,10 @@ function textOfT(t: XmlNode): string {
 
 type ManifestItem = { id: string; href: string; mime: string };
 
-async function readManifest(zip: JSZip): Promise<ManifestItem[]> {
+async function readManifest(zip: JSZip, budget: { left: number }): Promise<ManifestItem[]> {
   const hpf = zip.file("Contents/content.hpf");
   if (!hpf) return [];
-  const root = parser.parse(await hpf.async("string")) as XmlNode[];
+  const root = parser.parse(await readText(hpf, budget)) as XmlNode[];
   const pkg = root.find((n) => tagOf(n) === "package");
   const manifest = pkg ? find(childrenOf(pkg), "manifest")[0] : undefined;
   if (!manifest) return [];
@@ -90,13 +141,16 @@ export async function readHwpx(bytes: Uint8Array): Promise<HwpReadResult> {
     return hwpFail("damaged");
   }
 
+  // 풀린 크기의 합계 한도 (압축 폭탄 방어)
+  const budget = { left: MAX_TOTAL_BYTES };
+
   // 암호가 걸린 문서는 META-INF/manifest.xml에 암호 정보가 들어 있다
   const encManifest = zip.file("META-INF/manifest.xml");
-  if (encManifest && /encryption-data|EncryptionMethod/i.test(await encManifest.async("string"))) {
+  if (encManifest && /encryption-data|EncryptionMethod/i.test(await readText(encManifest, budget))) {
     return hwpFail("encrypted");
   }
 
-  const manifest = await readManifest(zip);
+  const manifest = await readManifest(zip, budget);
   const sections = sectionPaths(zip, manifest);
   if (sections.length === 0) return hwpFail("damaged");
 
@@ -115,7 +169,7 @@ export async function readHwpx(bytes: Uint8Array): Promise<HwpReadResult> {
   for (const [s, path] of sections.entries()) {
     let root: XmlNode[];
     try {
-      root = parser.parse(await zip.file(path)!.async("string")) as XmlNode[];
+      root = parser.parse(await readText(zip.file(path)!, budget)) as XmlNode[];
     } catch {
       return hwpFail("damaged");
     }
@@ -172,8 +226,11 @@ export async function readHwpx(bytes: Uint8Array): Promise<HwpReadResult> {
             const entry = ref ? imagesById.get(ref) : undefined;
             const file = entry ? zip.file(entry.href) : null;
             if (entry && file) {
-              const data = await file.async("uint8array");
-              images.push({ index: images.length + 1, path: entry.href, mime: entry.mime, size: data.byteLength });
+              // 그림은 크기만 필요하므로 풀지 않고 압축 정보에 적힌 크기를 쓴다. 그림 개수에도 상한을 둔다.
+              if (images.length < MAX_IMAGES) {
+                const declared = (file as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0;
+                images.push({ index: images.length + 1, path: entry.href, mime: entry.mime, size: declared });
+              }
             }
           }
         }
@@ -208,5 +265,5 @@ export async function readHwpx(bytes: Uint8Array): Promise<HwpReadResult> {
 export async function readHwpxImageBytes(bytes: Uint8Array, path: string): Promise<Uint8Array | null> {
   const zip = await JSZip.loadAsync(bytes);
   const file = zip.file(path);
-  return file ? file.async("uint8array") : null;
+  return file ? readEntry(file, { left: MAX_TOTAL_BYTES }) : null;
 }

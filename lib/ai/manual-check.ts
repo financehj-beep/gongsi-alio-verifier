@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { getOpenAI, modelName, reasoningOption } from "@/lib/ai/client";
+import { assertChunkCount, assertCounts, mapLimit } from "@/lib/ai/pool";
 import type { ManualClause, ManualDoc } from "@/lib/manual/types";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 import type { Finding } from "@/lib/types";
@@ -138,6 +139,7 @@ async function verifyCandidates(pairs: { text: string; clause: string }[], title
 }
 
 export async function checkManualRules(doc: HwpDocument, manual: ManualDoc): Promise<Finding[]> {
+  assertCounts(doc.paragraphs.length);
   const items: HItem[] = doc.paragraphs.map((p, i) => ({
     id: `H${i + 1}`,
     text: p.text.replace(/\n/g, " "),
@@ -154,20 +156,16 @@ export async function checkManualRules(doc: HwpDocument, manual: ManualDoc): Pro
   const orgName = items[0]?.text.match(/^[가-힣A-Za-z()·]{3,}(?=\s)/)?.[0];
   // 같은 검사를 두 번 따로 돌려 합친다: AI 답이 실행마다 조금씩 달라 한 번만 보면 놓치는 위반이 있다.
   // 모양이 틀린 답은 한 번 더 요청한다 (DESIGN.md §1)
-  const answers = (
-    await Promise.all(
-      chunks.flatMap((c) =>
-        [0, 1].map(async () => {
-          const picked = pickClauses(clauses, c.map((h) => h.text).join(" "));
-          try {
-            return await askChunk(picked, c, orgName);
-          } catch {
-            return askChunk(picked, c, orgName);
-          }
-        }),
-      ),
-    )
-  ).filter(Boolean);
+  const jobs = chunks.flatMap((c) => [c, c]);
+  assertChunkCount(jobs.length / 2);
+  const answers = await mapLimit(jobs, async (c) => {
+    const picked = pickClauses(clauses, c.map((h) => h.text).join(" "));
+    try {
+      return await askChunk(picked, c, orgName);
+    } catch {
+      return askChunk(picked, c, orgName);
+    }
+  });
 
   type Candidate = { h?: HItem; clause: ManualClause; quote: string; reason: string };
   const candidates: Candidate[] = [];

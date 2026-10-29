@@ -9,6 +9,21 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/**": ["./node_modules/pdfjs-dist/cmaps/**/*", "./data/sample-manual/**/*"],
   },
+  // 보안 헤더: 다른 사이트가 이 화면을 겹쳐 띄워 버튼을 누르게 속이는 것(클릭재킹)과 글자 형식 속임을 막는다
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+        ],
+      },
+    ];
+  },
   turbopack: {
     rules: {
       "*.css": {
