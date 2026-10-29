@@ -115,5 +115,20 @@ export async function checkSpelling(doc: HwpDocument): Promise<Finding[]> {
       });
     }
   }
-  return findings;
+  return mergeRepeats(findings);
+}
+
+// 같은 틀린 표현 → 같은 고친 표현이 여러 곳에 있으면 한 카드로 합친다. 다른 위치도 모두 카드에 남긴다 (PRD.md: 결과는 빠짐없이 보여준다)
+function mergeRepeats(findings: Finding[]): Finding[] {
+  const merged = new Map<string, Finding>();
+  for (const f of findings) {
+    const key = f.suggestion ?? "";
+    const first = merged.get(key);
+    if (!first || !f.hwpLocation || !f.hwpText) {
+      merged.set(key || `${merged.size}`, f);
+      continue;
+    }
+    first.moreLocations = [...(first.moreLocations ?? []), { hwpLocation: f.hwpLocation, hwpText: f.hwpText }];
+  }
+  return [...merged.values()];
 }

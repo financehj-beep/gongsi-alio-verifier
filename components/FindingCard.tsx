@@ -1,4 +1,4 @@
-import { formatLocations, highlightPair, type Piece } from "@/lib/format";
+import { formatHwpLocation, formatLocations, highlightPair, type Piece } from "@/lib/format";
 import type { Category, Finding } from "@/lib/types";
 
 const BADGE: Record<Category, string> = {
@@ -93,6 +93,18 @@ export default function FindingCard({ finding, number }: { finding: Finding; num
         )}
       </div>
 
+      {f.moreLocations && f.moreLocations.length > 0 && (
+        <details className="text-slate-600 dark:text-slate-400">
+          <summary className="cursor-pointer">같은 오류가 {f.moreLocations.length}곳 더 있습니다</summary>
+          <ul className="mt-2 space-y-1">
+            {f.moreLocations.map((m, i) => (
+              <li key={i}>
+                <span className="text-slate-500">{formatHwpLocation(m.hwpLocation)}</span> · {m.hwpText}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <p className="text-slate-600 dark:text-slate-400">{f.explanation}</p>
     </article>
   );
