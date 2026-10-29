@@ -89,18 +89,49 @@ const idOf = (value: string) => value.trim().match(/^[HM]\d+/)?.[0] ?? value.tri
 
 const squash = (text: string) => text.replace(/\s+/g, "");
 
-async function askChunk(clauses: { id: string; clause: ManualClause }[], items: HItem[]) {
+async function askChunk(clauses: { id: string; clause: ManualClause }[], items: HItem[], orgName?: string) {
+  // 문서 첫 문장에서 뽑은 기관명 후보. 기관명을 줄여 쓴 표기를 찾는 데 쓴다 (매뉴얼 조항이 근거인 점은 같다)
+  const hint = orgName ? `[참고] 이 문서 제목에 나온 기관명 후보: ${orgName}\n\n` : "";
   const manualText = clauses.map(({ id, clause }) => `${id} [${clause.label}] ${clause.text}`).join("\n");
   const docText = items.map((h) => `${h.id}: ${h.inTable ? "(표 안) " : ""}${h.text}`).join("\n");
   const response = await getOpenAI().responses.parse({
     model: modelName(),
     ...reasoningOption(),
     instructions: INSTRUCTIONS,
-    input: `[매뉴얼 조항]\n${manualText}\n\n[검사할 문서]\n${docText}`,
+    input: `[매뉴얼 조항]\n${manualText}\n\n${hint}[검사할 문서]\n${docText}`,
     text: { format: zodTextFormat(AnswerSchema, "manual_check") },
   });
   if (!response.output_parsed) throw new Error("AI 답이 정해진 모양이 아닙니다.");
   return response.output_parsed;
+}
+
+const VerifySchema = z.object({ checks: z.array(z.object({ n: z.number(), violated: z.boolean() })) });
+
+const VERIFY_INSTRUCTIONS = `공시 문서의 문장이 매뉴얼 조항을 어겼는지 하나씩 확인한다. 항목마다 [조항]과 [문장]이 주어진다.
+violated는 문장이 조항의 내용과 분명히 어긋날 때만 true다. 조항을 지켰거나, 조항과 관계없거나, 어긋나는지 애매하면 false다.
+날짜·금액처럼 표기 형식을 정한 조항은 문장의 표기가 조항이 정한 모양과 다르면 true다 (예: 조항이 2026.11.03 형식인데 문장이 2026-11-03이면 true, 문장이 2026.11.03(화)이면 false).
+기관명 조항은 [문서 제목]에 나온 정식 기관명의 앞부분을 뺀 줄임말(예: "한국시험공사"를 "시험공사"로 쓴 경우)을 약칭으로 보아 true다.\n조항의 "예:" 부분은 설명용 예시일 뿐이다. 항목마다 번호 n에 맞춰 하나씩 답한다.`;
+
+// 후보마다 true(어김)/false(안 어김)를 돌려준다. 확인이 실패하면 후보를 그대로 믿는다.
+async function verifyCandidates(pairs: { text: string; clause: string }[], title: string): Promise<boolean[]> {
+  if (pairs.length === 0) return [];
+  const run = async () => {
+    const response = await getOpenAI().responses.parse({
+      model: modelName(),
+      ...reasoningOption(),
+      instructions: VERIFY_INSTRUCTIONS,
+      input: `[문서 제목] ${title}\n\n` + pairs.map((p, i) => `${i + 1}.\n[조항] ${p.clause}\n[문장] ${p.text}`).join("\n\n"),
+      text: { format: zodTextFormat(VerifySchema, "verify") },
+    });
+    if (!response.output_parsed) throw new Error("AI 답이 정해진 모양이 아닙니다.");
+    return response.output_parsed;
+  };
+  try {
+    const answer = await run().catch(run);
+    return pairs.map((_, i) => answer.checks.find((c) => c.n === i + 1)?.violated ?? true);
+  } catch {
+    return pairs.map(() => true);
+  }
 }
 
 export async function checkManualRules(doc: HwpDocument, manual: ManualDoc): Promise<Finding[]> {
@@ -116,19 +147,27 @@ export async function checkManualRules(doc: HwpDocument, manual: ManualDoc): Pro
   const chunks = chunk(items.filter((h) => h.text.trim()));
   if (chunks.length === 0 || clauses.length === 0) return [];
 
+  // 제목(첫 문단)의 첫 낱말이 기관명인 경우가 많다 (예: "한국시험공사 2026년도 … 채용 공고")
+  const orgName = items[0]?.text.match(/^[가-힣A-Za-z()·]{3,}(?=\s)/)?.[0];
+  // 같은 검사를 두 번 따로 돌려 합친다: AI 답이 실행마다 조금씩 달라 한 번만 보면 놓치는 위반이 있다.
   // 모양이 틀린 답은 한 번 더 요청한다 (DESIGN.md §1)
-  const answers = await Promise.all(
-    chunks.map(async (c) => {
-      const picked = pickClauses(clauses, c.map((h) => h.text).join(" "));
-      try {
-        return await askChunk(picked, c);
-      } catch {
-        return askChunk(picked, c);
-      }
-    }),
-  );
+  const answers = (
+    await Promise.all(
+      chunks.flatMap((c) =>
+        [0, 1].map(async () => {
+          const picked = pickClauses(clauses, c.map((h) => h.text).join(" "));
+          try {
+            return await askChunk(picked, c, orgName);
+          } catch {
+            return askChunk(picked, c, orgName);
+          }
+        }),
+      ),
+    )
+  ).filter(Boolean);
 
-  const findings: Finding[] = [];
+  type Candidate = { h?: HItem; clause: ManualClause; quote: string; reason: string };
+  const candidates: Candidate[] = [];
   const seen = new Set<string>();
   for (const answer of answers) {
     for (const v of answer.violations) {
@@ -144,15 +183,22 @@ export async function checkManualRules(doc: HwpDocument, manual: ManualDoc): Pro
       const key = `${h?.id ?? "-"}|${clause.label}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      findings.push({
-        category: "규칙 위반",
-        source: "본문",
-        hwpLocation: h ? doc.paragraphs[h.index].location : undefined,
-        hwpText: h?.text,
-        manualClause: { item: clause.label, page: clause.page, quote },
-        explanation: v.reason.replace(/[HM]\d+(?:은|는|이|가|의|에서)?\s*/g, "").trim() || "매뉴얼 조항과 맞지 않습니다.",
-      });
+      candidates.push({ h, clause, quote, reason: v.reason });
     }
   }
-  return findings;
+
+  // 후보를 하나씩 다시 확인한다: 두 번 합치면 늘어나는 잘못된 지적(오탐)을 걸러낸다.
+  const verified = await verifyCandidates(candidates.filter((c) => c.h).map((c) => ({ text: c.h!.text, clause: c.clause.text })), items[0]?.text ?? "");
+  const dropped = new Set(candidates.filter((c) => c.h).filter((_, i) => verified[i] === false));
+
+  return candidates
+    .filter((c) => !dropped.has(c))
+    .map((c) => ({
+      category: "규칙 위반" as const,
+      source: "본문" as const,
+      hwpLocation: c.h ? doc.paragraphs[c.h.index].location : undefined,
+      hwpText: c.h?.text,
+      manualClause: { item: c.clause.label, page: c.clause.page, quote: c.quote },
+      explanation: c.reason.replace(/[HM]\d+(?:은|는|이|가|의|에서)?\s*/g, "").trim() || "매뉴얼 조항과 맞지 않습니다.",
+    }));
 }

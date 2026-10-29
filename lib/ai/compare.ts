@@ -155,6 +155,61 @@ function chunk(items: HItem[]): HItem[][] {
   return chunks;
 }
 
+// ②-2 짝도 못 짓고 누락 표시도 못 받은 문장을, 반대쪽 전체 글자를 보여 주며 한 번 더 판정한다.
+// 묶음마다 AI의 답이 엇갈리거나 빠뜨린 문장을 놓치지 않기 위해서다.
+const LeftoverSchema = z.object({
+  verdicts: z.array(
+    z.object({
+      id: z.string().describe("판정할 문장 번호 (예: H3, W5)"),
+      verdict: z.enum(["있음", "없음", "본문 아님"]),
+    }),
+  ),
+});
+
+const LEFTOVER_INSTRUCTIONS = `너는 공공기관 경영공시 담당자를 돕는 검증 도우미다.
+[한글파일 전체]와 [웹페이지 전체]를 보고, [판정할 문장]마다 반대쪽 글에 같은 내용(같은 항목)이 있는지 판정한다.
+H…는 한글파일 문장이니 웹페이지 전체에서, W…는 웹페이지 문장이니 한글파일 전체에서 찾는다.
+
+규칙:
+1. 있음: 반대쪽에 같은 항목을 말하는 문장이 있다. 글자가 조금 달라도 같은 항목이면 있음이다.
+2. 없음: 반대쪽 어디에도 같은 항목이 없다. 확실할 때만 없음으로 한다.
+3. 본문 아님: 웹페이지 문장(W…)이 사이트 메뉴, 지원 버튼 안내, 사이트 안내문, 광고처럼 공고 본문이 아니다. 한글파일 문장에는 쓰지 않는다.
+4. 판정할 문장 번호마다 하나씩 답한다. 주어진 번호만 쓴다.`;
+
+async function judgeLeftovers(hs: HItem[], ws: WItem[], targets: (HItem | WItem)[]): Promise<Map<string, "있음" | "없음" | "본문 아님">> {
+  const cap = (items: { id: string; text: string }[]) => {
+    let text = "";
+    for (const i of items) {
+      const line = `${i.id}: ${i.text}\n`;
+      if (text.length + line.length > WEB_MAX_CHARS) break;
+      text += line;
+    }
+    return text;
+  };
+  const out = new Map<string, "있음" | "없음" | "본문 아님">();
+  for (let i = 0; i < targets.length; i += 40) {
+    const part = targets.slice(i, i + 40);
+    const run = async () => {
+      const response = await getOpenAI().responses.parse({
+        model: modelName(),
+        ...reasoningOption(),
+        instructions: LEFTOVER_INSTRUCTIONS,
+        input: `[한글파일 전체]\n${cap(hs)}\n[웹페이지 전체]\n${cap(ws)}\n[판정할 문장]\n${part.map((t) => `${t.id}: ${t.text}`).join("\n")}`,
+        text: { format: zodTextFormat(LeftoverSchema, "leftover") },
+      });
+      if (!response.output_parsed) throw new Error("AI 답이 정해진 모양이 아닙니다.");
+      return response.output_parsed;
+    };
+    try {
+      const answer = await run().catch(run);
+      answer.verdicts.forEach((v) => out.set(idOf(v.id), v.verdict));
+    } catch {
+      // 이 판정이 실패해도 앞 단계 결과는 그대로 쓴다
+    }
+  }
+  return out;
+}
+
 // ② 남은 문장만 AI가 짝을 맞춘다
 async function askChunk(hs: HItem[], ws: WItem[]): Promise<Answer> {
   let webText = "";
@@ -204,6 +259,9 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
 
   const findings: Finding[] = [];
   const pairedW = new Set<string>();
+  const pairedH = new Set<string>();
+  const flaggedH = new Set<string>();
+  const flaggedW = new Set<string>();
   const hwpLoc = (h: HItem) => (h.index >= 0 ? doc.paragraphs[h.index].location : undefined);
   // 이미지에서 읽은 문장이 낀 결과는 출처를 "이미지"로 표시하고, 글자를 또렷하게 읽지 못했으면 확인 필요로 바꾼다
   const origin = (h: HItem | undefined, ws: WItem[]) => {
@@ -222,6 +280,7 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
       // 없는 번호를 쓴 답은 버린다 (지어내지 않기)
       if (!h || matchedH.has(h.id) || wList.length === 0) continue;
       wList.forEach((w) => pairedW.add(w.id));
+      pairedH.add(h.id);
       const webText = wList.map((w) => w.text).join(" ");
 
       // ③ 숫자·날짜는 코드가 다시 대조한다. 다르면 AI 판단과 상관없이 불일치.
@@ -258,6 +317,7 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
     for (const id of answer.hwpMissing) {
       const h = hById.get(idOf(id));
       if (!h || matchedH.has(h.id)) continue;
+      flaggedH.add(h.id);
       const o = origin(h, []);
       findings.push({
         category: o.unclear ? "확인 필요" : "누락",
@@ -279,6 +339,7 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
   for (const id of webMissing ?? []) {
     const w = wById.get(id);
     if (!w || matchedW.has(id) || pairedW.has(id)) continue;
+    flaggedW.add(id);
     const o = origin(undefined, [w]);
     findings.push({
       category: o.unclear ? "확인 필요" : "누락",
@@ -290,6 +351,29 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
       webText: w.text,
       explanation: "웹페이지에는 있는데 한글파일에는 없는 내용입니다.",
     });
+  }
+
+  // 남은 문장 다시 판정: 짝도 못 짓고 누락 표시도 못 받은 문장
+  const leftovers: (HItem | WItem)[] = [
+    ...restH.filter((h) => !pairedH.has(h.id) && !flaggedH.has(h.id)),
+    ...restW.filter((w) => !pairedW.has(w.id) && !flaggedW.has(w.id)),
+  ];
+  if (leftovers.length > 0) {
+    const verdicts = await judgeLeftovers(hs, ws, leftovers);
+    for (const item of leftovers) {
+      if (verdicts.get(item.id) !== "없음") continue;
+      const h = hById.get(item.id);
+      const w = wById.get(item.id);
+      const o = origin(h, w ? [w] : []);
+      findings.push({
+        category: o.unclear ? "확인 필요" : "누락",
+        source: o.source,
+        imageLocation: o.imageLocation,
+        ...(h ? { hwpLocation: hwpLoc(h), missingSide: "웹페이지" as const, hwpText: h.text, webText: "" } : {}),
+        ...(w ? { webLocation: w.image ? undefined : w.location, missingSide: "한글파일" as const, hwpText: "", webText: w.text } : {}),
+        explanation: h ? "한글파일에는 있는데 웹페이지에는 없는 내용입니다." : "웹페이지에는 있는데 한글파일에는 없는 내용입니다.",
+      });
+    }
   }
 
   return findings;
