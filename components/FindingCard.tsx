@@ -25,6 +25,17 @@ function Highlighted({ pieces }: { pieces: Piece[] }) {
   );
 }
 
+// 문장 안에서 처음 나오는 part를 강조 조각으로 나눈다
+function markPart(text: string, part: string): Piece[] | null {
+  const at = text.indexOf(part);
+  if (at === -1) return null;
+  return [
+    { text: text.slice(0, at), changed: false },
+    { text: part, changed: true },
+    { text: text.slice(at + part.length), changed: false },
+  ].filter((p) => p.text.length > 0);
+}
+
 function Line({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[5.5rem_1fr] gap-2">
@@ -39,6 +50,8 @@ export default function FindingCard({ finding, number }: { finding: Finding; num
   const f = finding;
   const both = Boolean(f.hwpText && f.webText);
   const pair = both ? highlightPair(f.hwpText!, f.webText!) : null;
+  // 한글파일 문장만 있는 카드(맞춤법 등)는 짚은 부분만 강조한다
+  const marked = !pair && f.hwpText && f.diff?.hwp ? markPart(f.hwpText, f.diff.hwp) : null;
 
   return (
     <article className="space-y-3 rounded-lg border border-slate-200 p-4 text-sm dark:border-slate-800">
@@ -54,7 +67,13 @@ export default function FindingCard({ finding, number }: { finding: Finding; num
       <div className="space-y-1">
         {(f.hwpText !== undefined || f.missingSide === "한글파일") && (
           <Line label="원본">
-            {pair ? <Highlighted pieces={pair.hwp} /> : f.hwpText || <em className="text-slate-400">(한글파일에 없음)</em>}
+            {pair ? (
+              <Highlighted pieces={pair.hwp} />
+            ) : marked ? (
+              <Highlighted pieces={marked} />
+            ) : (
+              f.hwpText || <em className="text-slate-400">(한글파일에 없음)</em>
+            )}
           </Line>
         )}
         {(f.webText !== undefined || f.missingSide === "웹페이지") && (

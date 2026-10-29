@@ -20,30 +20,42 @@ import ProgressSteps, { type StepName, type StepState } from "@/components/Progr
 import ResultsView from "@/components/ResultsView";
 import type { Finding } from "@/lib/types";
 
-// 지금 상태를 4단계 진행 표시로 바꾼다. 맞춤법·매뉴얼은 아직 만들지 않아 "준비 중"으로 보인다.
+// 지금까지 만든 단계. 매뉴얼은 아직 만들지 않아 "준비 중"으로 보인다.
+const BUILT: StepName[] = ["읽기", "비교", "맞춤법"];
+
+// 지금 단계 앞은 완료, 지금 단계는 진행 중(또는 실패), 뒤는 대기로 표시한다
+function statesAt(current: StepName | "끝", mode: "active" | "error" | "done" = "active"): Record<StepName, StepState> {
+  const at = current === "끝" ? BUILT.length : BUILT.indexOf(current);
+  const states = { 매뉴얼: "unavailable" } as Record<StepName, StepState>;
+  BUILT.forEach((step, i) => {
+    states[step] = i < at ? "done" : i === at ? mode : "waiting";
+  });
+  return states;
+}
+
+const DETAIL: Partial<Record<StepName, string>> = {
+  비교: "웹페이지와 한글파일 비교 중",
+  맞춤법: "한글파일 맞춤법 검사 중",
+};
+
+// 지금 상태를 4단계 진행 표시로 바꾼다
 function progressOf(status: Status): { states: Record<StepName, StepState>; detail?: string } | null {
-  const later = { 맞춤법: "unavailable", 매뉴얼: "unavailable" } as const;
   switch (status.kind) {
     case "idle":
       return null;
     case "uploading":
-      return { states: { 읽기: "active", 비교: "waiting", ...later }, detail: `한글파일 올리는 중 ${status.percent}%` };
+      return { states: statesAt("읽기"), detail: `한글파일 올리는 중 ${status.percent}%` };
     case "reading":
-      return { states: { 읽기: "active", 비교: "waiting", ...later }, detail: "웹페이지와 한글파일 읽는 중" };
+      return { states: statesAt("읽기"), detail: "웹페이지와 한글파일 읽는 중" };
     case "pairWarning":
       // 읽기는 끝났고 담당자의 선택을 기다리는 중이라 시간을 세지 않는다
-      return { states: { 읽기: "done", 비교: "waiting", ...later }, detail: "짝 확인: 담당자가 [계속] 또는 [취소]를 고를 차례" };
-    case "comparing":
-      return { states: { 읽기: "done", 비교: "active", ...later }, detail: "웹페이지와 한글파일 비교 중" };
-    case "compared":
-      return { states: { 읽기: "done", 비교: "done", ...later } };
+      return { states: statesAt("읽기", "done"), detail: "짝 확인: 담당자가 [계속] 또는 [취소]를 고를 차례" };
+    case "running":
+      return { states: statesAt(status.step), detail: DETAIL[status.step] };
+    case "done":
+      return { states: statesAt("끝") };
     case "error":
-      return {
-        states:
-          status.step === "읽기"
-            ? { 읽기: "error", 비교: "waiting", ...later }
-            : { 읽기: "done", 비교: "error", ...later },
-      };
+      return { states: statesAt(status.step, "error") };
   }
 }
 
@@ -54,9 +66,11 @@ type Status =
   | { kind: "uploading"; percent: number }
   | { kind: "reading" }
   | ({ kind: "pairWarning"; pair: PairCheck } & Texts)
-  | ({ kind: "comparing" } & Texts)
-  | ({ kind: "compared"; findings: Finding[] } & Texts)
-  | ({ kind: "error"; message: string; step: StepName } & Partial<Texts>);
+  // 비교·맞춤법 단계 진행 중. 앞 단계에서 찾은 결과를 들고 간다.
+  | ({ kind: "running"; step: StepName; findings: Finding[] } & Texts)
+  | ({ kind: "done"; findings: Finding[] } & Texts)
+  // 실패해도 앞 단계 결과는 유지한다 (DESIGN.md §7 AI 응답 실패)
+  | ({ kind: "error"; message: string; step: StepName; findings?: Finding[] } & Partial<Texts>);
 
 // Design Ref: DESIGN.md §2.1 입력 칸 — URL 1개 + 한글파일 1개 + [검증 시작]
 export default function VerifyForm() {
@@ -126,28 +140,40 @@ export default function VerifyForm() {
     }
   }
 
-  // 2단계 비교: 1단계에서 받은 글자를 다시 보낸다 (DESIGN.md §3 단계 사이에 글자를 넘기는 방법)
+  // 2단계 비교 → 3단계 맞춤법을 차례로 부른다. 1단계에서 받은 글자를 단계마다 다시 보낸다
+  // (DESIGN.md §3 단계 사이에 글자를 넘기는 방법)
   async function compare(texts: Texts) {
-    setStatus({ kind: "comparing", ...texts });
-    try {
-      const res = await fetch("/api/verify/compare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(texts),
-      });
-      const data = (await res.json()) as { ok: true; findings: Finding[] } | { ok: false; error: { message: string } };
-      setStatus(
-        data.ok
-          ? { kind: "compared", findings: data.findings, ...texts }
-          : { kind: "error", step: "비교", message: data.error.message, ...texts },
-      );
-    } catch {
-      setStatus({ kind: "error", step: "비교", message: "AI 검사 중 문제가 생겼습니다 (비교 단계). 다시 시도해 주세요.", ...texts });
+    const steps: { step: StepName; url: string; body: object }[] = [
+      { step: "비교", url: "/api/verify/compare", body: texts },
+      { step: "맞춤법", url: "/api/verify/spelling", body: { hwp: texts.hwp } },
+    ];
+    let findings: Finding[] = [];
+    for (const { step, url, body } of steps) {
+      setStatus({ kind: "running", step, findings, ...texts });
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = (await res.json()) as { ok: true; findings: Finding[] } | { ok: false; error: { message: string } };
+        if (!data.ok) {
+          setStatus({ kind: "error", step, message: data.error.message, findings, ...texts });
+          return;
+        }
+        findings = [...findings, ...data.findings];
+      } catch {
+        setStatus({ kind: "error", step, message: `AI 검사 중 문제가 생겼습니다 (${step} 단계). 다시 시도해 주세요.`, findings, ...texts });
+        return;
+      }
     }
+    setStatus({ kind: "done", findings, ...texts });
   }
 
   // 짝 확인 경고가 떠 있는 동안에는 먼저 [계속]이나 [취소]를 고르게 한다
-  const busy = ["uploading", "reading", "pairWarning", "comparing"].includes(status.kind);
+  const busy = ["uploading", "reading", "pairWarning", "running"].includes(status.kind);
+  // 지금까지 찾은 결과 (중간에 실패해도 앞 단계 결과는 보여준다)
+  const findings = "findings" in status ? status.findings : undefined;
   const texts = "web" in status && status.web && status.hwp ? { web: status.web, hwp: status.hwp } : null;
   const progress = progressOf(status);
 
@@ -212,7 +238,7 @@ export default function VerifyForm() {
           onCancel={() => setStatus({ kind: "idle" })}
         />
       )}
-      {status.kind === "compared" && <ResultsView findings={status.findings} />}
+      {findings && (status.kind === "done" || findings.length > 0) && <ResultsView findings={findings} />}
       {texts && status.kind !== "pairWarning" && (
         // 꺼낸 글자는 필요할 때만 펼쳐 본다
         <details className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
