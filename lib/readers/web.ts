@@ -1,5 +1,6 @@
 import "server-only";
 import * as cheerio from "cheerio";
+import type { ImageStats, ImageText } from "@/lib/readers/image-types";
 
 // Design Ref: DESIGN.md §3 1단계 읽기 2번 — URL의 웹페이지를 가져와 메뉴·광고·스크립트를 걷어내고 본문 후보만 남긴다
 
@@ -13,6 +14,9 @@ export type WebPage = {
   title: string;
   blocks: WebBlock[];
   images: WebImage[];
+  // 1단계 읽기가 이미지 속 글자를 읽은 뒤 채운다
+  imageTexts?: ImageText[];
+  imageStats?: ImageStats;
   charCount: number;
 };
 
@@ -47,7 +51,7 @@ function fail(code: WebReadError["code"]): { ok: false; error: WebReadError } {
 }
 
 // 서버가 내부망 주소를 대신 열지 않도록 막는다
-function isPublicHttpUrl(value: string): URL | null {
+export function isPublicHttpUrl(value: string): URL | null {
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;

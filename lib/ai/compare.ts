@@ -5,14 +5,16 @@ import { getOpenAI, modelName, reasoningOption } from "@/lib/ai/client";
 import { findNumberMismatch, sameIgnoringSpaces } from "@/lib/checks/numbers";
 import type { HwpDocument } from "@/lib/readers/hwp-types";
 import type { WebPage } from "@/lib/readers/web";
-import type { Finding, WebLocation } from "@/lib/types";
+import type { Finding, ImageLocation, WebLocation } from "@/lib/types";
 
 // Design Ref: DESIGN.md §3 2단계 비교
 // ① 글자가 똑같은 문장은 코드가 먼저 짝지어 뺀다 → ② 남은 문장만 AI가 짝을 맞춘다
 // → ③ AI가 짝지은 문장의 숫자를 코드가 다시 대조한다 → ④ 결과를 정해진 모양으로 만든다
 
-type HItem = { id: string; text: string; index: number };
-type WItem = { id: string; text: string; location: WebLocation };
+// 이미지에서 읽은 문장이면 image가 있다. clear=false는 글자를 또렷하게 읽지 못한 것 (PRD.md 5번: 불일치 대신 확인 필요)
+type ImageInfo = { location: ImageLocation; clear: boolean };
+type HItem = { id: string; text: string; index: number; image?: ImageInfo };
+type WItem = { id: string; text: string; location: WebLocation; image?: ImageInfo };
 
 // AI가 한 번에 읽기 좋은 양 (DESIGN.md §3 AI 입력 한도)
 const HWP_CHUNK_CHARS = 6000;
@@ -59,7 +61,13 @@ function cleanReason(reason: string): string {
 const norm = (s: string) => s.replace(/\s+/g, "");
 
 function hwpItems(doc: HwpDocument): HItem[] {
-  return doc.paragraphs.map((p, i) => ({ id: `H${i + 1}`, text: p.text.replace(/\n/g, " "), index: i }));
+  const out: HItem[] = doc.paragraphs.map((p, i) => ({ id: `H${i + 1}`, text: p.text.replace(/\n/g, " "), index: i }));
+  for (const img of doc.imageTexts ?? []) {
+    for (const line of img.lines) {
+      out.push({ id: `H${out.length + 1}`, text: line.text, index: -1, image: { location: { side: "한글파일", index: img.index, area: line.area }, clear: line.clear } });
+    }
+  }
+  return out;
 }
 
 // 웹페이지 소제목도 비교 대상이다 (한글파일에도 같은 소제목이 있다)
@@ -69,6 +77,16 @@ function webItems(page: WebPage): WItem[] {
   for (const block of page.blocks) {
     if (block.heading) push(block.heading, { heading: block.heading, sentence: 0 });
     block.sentences.forEach((s, i) => push(s, { heading: block.heading, sentence: i + 1 }));
+  }
+  for (const img of page.imageTexts ?? []) {
+    for (const line of img.lines) {
+      out.push({
+        id: `W${out.length + 1}`,
+        text: line.text,
+        location: { heading: "", sentence: 0 },
+        image: { location: { side: "웹페이지", index: img.index, area: line.area }, clear: line.clear },
+      });
+    }
   }
   return out;
 }
@@ -183,7 +201,16 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
 
   const findings: Finding[] = [];
   const pairedW = new Set<string>();
-  const hwpLoc = (h: HItem) => doc.paragraphs[h.index].location;
+  const hwpLoc = (h: HItem) => (h.index >= 0 ? doc.paragraphs[h.index].location : undefined);
+  // 이미지에서 읽은 문장이 낀 결과는 출처를 "이미지"로 표시하고, 글자를 또렷하게 읽지 못했으면 확인 필요로 바꾼다
+  const origin = (h: HItem | undefined, ws: WItem[]) => {
+    const images = [h?.image, ...ws.map((w) => w.image)].filter((i): i is ImageInfo => Boolean(i));
+    return {
+      source: images.length > 0 ? ("이미지" as const) : ("본문" as const),
+      imageLocation: images[0]?.location,
+      unclear: images.some((i) => !i.clear),
+    };
+  };
 
   for (const answer of answers) {
     for (const pair of answer.pairs) {
@@ -195,13 +222,16 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
       const webText = wList.map((w) => w.text).join(" ");
 
       // ③ 숫자·날짜는 코드가 다시 대조한다. 다르면 AI 판단과 상관없이 불일치.
+      const o = origin(h, wList);
+      const webLocation = wList[0].image ? undefined : wList[0].location;
       const numbers = findNumberMismatch(h.text, webText);
       if (numbers) {
         findings.push({
-          category: "불일치",
-          source: "본문",
+          category: o.unclear ? "확인 필요" : "불일치",
+          source: o.source,
+          imageLocation: o.imageLocation,
           hwpLocation: hwpLoc(h),
-          webLocation: wList[0].location,
+          webLocation,
           hwpText: h.text,
           webText,
           diff: numbers,
@@ -211,10 +241,11 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
       }
       if (pair.verdict === "같음" || sameIgnoringSpaces(h.text, webText)) continue;
       findings.push({
-        category: pair.verdict === "다름" ? "불일치" : "확인 필요",
-        source: "본문",
+        category: pair.verdict === "다름" && !o.unclear ? "불일치" : "확인 필요",
+        source: o.source,
+        imageLocation: o.imageLocation,
         hwpLocation: hwpLoc(h),
-        webLocation: wList[0].location,
+        webLocation,
         hwpText: h.text,
         webText,
         explanation: cleanReason(pair.reason) || (pair.verdict === "다름" ? "문구가 다릅니다." : "같은 내용인지 확인이 필요합니다."),
@@ -224,9 +255,11 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
     for (const id of answer.hwpMissing) {
       const h = hById.get(id);
       if (!h || matchedH.has(h.id)) continue;
+      const o = origin(h, []);
       findings.push({
-        category: "누락",
-        source: "본문",
+        category: o.unclear ? "확인 필요" : "누락",
+        source: o.source,
+        imageLocation: o.imageLocation,
         hwpLocation: hwpLoc(h),
         missingSide: "웹페이지",
         hwpText: h.text,
@@ -243,10 +276,12 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
   for (const id of webMissing ?? []) {
     const w = wById.get(id);
     if (!w || matchedW.has(id) || pairedW.has(id)) continue;
+    const o = origin(undefined, [w]);
     findings.push({
-      category: "누락",
-      source: "본문",
-      webLocation: w.location,
+      category: o.unclear ? "확인 필요" : "누락",
+      source: o.source,
+      imageLocation: o.imageLocation,
+      webLocation: w.image ? undefined : w.location,
       missingSide: "한글파일",
       hwpText: "",
       webText: w.text,

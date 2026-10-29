@@ -182,6 +182,9 @@ export default function VerifyForm() {
   const findings = "findings" in status ? status.findings : undefined;
   const texts = "web" in status && status.web && status.hwp ? { web: status.web, hwp: status.hwp } : null;
   const progress = progressOf(status);
+  // 이미지 글자를 읽지 못한 장이 있으면 알린다 (그 부분은 검증되지 않았기 때문)
+  const imageFailed = texts ? (texts.web.imageStats?.failed ?? 0) + (texts.hwp.imageStats?.failed ?? 0) : 0;
+  const imageTotal = texts ? (texts.web.imageStats?.total ?? 0) + (texts.hwp.imageStats?.total ?? 0) : 0;
 
   return (
     <div className="space-y-6">
@@ -243,6 +246,11 @@ export default function VerifyForm() {
           onContinue={() => compare({ web: status.web, hwp: status.hwp })}
           onCancel={() => setStatus({ kind: "idle" })}
         />
+      )}
+      {imageFailed > 0 && status.kind !== "pairWarning" && (
+        <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          이미지 {imageTotal}장 중 {imageFailed}장의 글자를 읽지 못했습니다. 그 이미지 속 내용은 검증되지 않았으니 직접 확인해 주세요.
+        </p>
       )}
       {findings && (status.kind === "done" || findings.length > 0) && <ResultsView findings={findings} manualName={status.kind === "done" ? status.manualName : undefined} />}
       {texts && status.kind !== "pairWarning" && (

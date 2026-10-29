@@ -1,4 +1,5 @@
 import type { HwpLocation } from "@/lib/types";
+import type { ImageStats, ImageText } from "@/lib/readers/image-types";
 
 // .hwpx·.hwp 읽기가 함께 쓰는 결과 모양 (DESIGN.md §3 1단계 읽기 3번)
 
@@ -11,6 +12,9 @@ export type HwpDocument = {
   format: "hwpx" | "hwp";
   paragraphs: HwpParagraph[];
   images: HwpImage[];
+  // 1단계 읽기가 그림 속 글자를 읽은 뒤 채운다
+  imageTexts?: ImageText[];
+  imageStats?: ImageStats;
   // 파일에 쪽 나눔 정보가 있어 쪽 번호를 알 수 있었는지
   pageKnown: boolean;
   pageCount?: number;

@@ -1,8 +1,9 @@
 import "server-only";
 import { parse } from "hwp.js";
 import * as CFB from "cfb";
+import { inflateRawSync } from "node:zlib";
 import type { HwpLocation } from "@/lib/types";
-import { hwpFail, type HwpParagraph, type HwpReadResult } from "@/lib/readers/hwp-types";
+import { hwpFail, type HwpImage, type HwpParagraph, type HwpReadResult } from "@/lib/readers/hwp-types";
 
 // Design Ref: DESIGN.md §4.2 hwp.js — 예전 형식 한글파일(.hwp)에서 글자를 쪽·문단·표 위치와 함께 뽑는다.
 // .hwp는 여러 칸으로 나뉜 보관 파일이고, 맨 앞 FileHeader에 "암호 / 배포용 문서" 표시가 들어 있다.
@@ -42,6 +43,48 @@ function readFlags(bytes: Uint8Array): { encrypted: boolean; distribution: boole
   } catch {
     return null;
   }
+}
+
+// BinData 칸에 든 그림 파일. 압축되어 있으면 풀고, 그림 파일 맨 앞 표시(PNG·JPEG·GIF·WEBP)로 그림인지 확인한다.
+function imageKind(data: Uint8Array): string | null {
+  const b = data;
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  if (b[0] === 0xff && b[1] === 0xd8) return "image/jpeg";
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return "image/gif";
+  if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57) return "image/webp";
+  return null;
+}
+
+function binDataImages(bytes: Uint8Array): { path: string; mime: string; data: Uint8Array }[] {
+  try {
+    const cfb = CFB.read(bytes, { type: "buffer" });
+    const out: { path: string; mime: string; data: Uint8Array }[] = [];
+    cfb.FullPaths.forEach((full, i) => {
+      if (!/\/BinData\/[^/]+$/i.test(full)) return;
+      const raw = cfb.FileIndex[i].content;
+      if (!raw) return;
+      const rawBytes = new Uint8Array(raw);
+      let data: Uint8Array = rawBytes;
+      let mime = imageKind(rawBytes);
+      if (!mime) {
+        try {
+          data = new Uint8Array(inflateRawSync(rawBytes));
+          mime = imageKind(data);
+        } catch {
+          // 풀리지 않는 칸은 그림이 아니다
+        }
+      }
+      if (mime) out.push({ path: full.replace(/^.*?\/BinData\//i, "BinData/"), mime, data });
+    });
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+  } catch {
+    return [];
+  }
+}
+
+// 그림 파일 내용을 꺼낸다 (이미지 글자 읽기에서 쓴다)
+export async function readHwpImageBytes(bytes: Uint8Array, path: string): Promise<Uint8Array | null> {
+  return binDataImages(bytes).find((i) => i.path === path)?.data ?? null;
 }
 
 export async function readHwp(bytes: Uint8Array): Promise<HwpReadResult> {
@@ -106,7 +149,8 @@ export async function readHwp(bytes: Uint8Array): Promise<HwpReadResult> {
   });
 
   const charCount = paragraphs.reduce((n, p) => n + p.text.length, 0);
-  if (charCount === 0) return hwpFail("empty");
+  const images: HwpImage[] = binDataImages(bytes).map((img, i) => ({ index: i + 1, path: img.path, mime: img.mime, size: img.data.byteLength }));
+  if (charCount === 0 && images.length === 0) return hwpFail("empty");
 
   // 쪽 정보가 없으면 쪽 번호를 버리고 전체 문단 순서만 남긴다 (PRD.md 4번)
   if (!pageKnown) {
@@ -120,6 +164,5 @@ export async function readHwp(bytes: Uint8Array): Promise<HwpReadResult> {
     }
   }
 
-  // 그림 속 글자 읽기는 PLAN.md 15번에서 .hwp까지 함께 붙인다
-  return { ok: true, doc: { format: "hwp", paragraphs, images: [], pageKnown, pageCount: pageKnown ? page : undefined, charCount } };
+  return { ok: true, doc: { format: "hwp", paragraphs, images, pageKnown, pageCount: pageKnown ? page : undefined, charCount } };
 }
