@@ -28,7 +28,11 @@ export function findNumberMismatch(hwpText: string, webText: string): NumberMism
   const b = numberTokens(webText);
   const onlyHwp = leftover(a, b);
   const onlyWeb = leftover(b, a);
-  if (onlyHwp.length === 0 && onlyWeb.length === 0) return null;
+  if (onlyHwp.length === 0 && onlyWeb.length === 0) {
+    // 숫자 구성은 같아도 자리가 바뀌면(서류 11.3·면접 11.10 ↔ 서류 11.10·면접 11.3) 뜻이 달라지므로 불일치다
+    const i = a.findIndex((t, k) => t !== b[k]);
+    return i === -1 ? null : { hwp: a[i], web: b[i] };
+  }
   return { hwp: onlyHwp[0] ?? "(없음)", web: onlyWeb[0] ?? "(없음)" };
 }
 
