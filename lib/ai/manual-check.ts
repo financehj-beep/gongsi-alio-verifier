@@ -33,6 +33,7 @@ const INSTRUCTIONS = `너는 공공기관 공시 문서가 공시 매뉴얼 규�
 1. 근거는 입력의 매뉴얼 조항(M…)뿐이다. 매뉴얼에 없는 규칙, 일반 상식, 네 의견으로 위반을 만들지 않는다.
 2. 문서(H…)가 조항의 내용과 분명히 어긋날 때만 위반으로 적는다. 조항과 관계없는 문장, 어긋나는지 애매한 문장은 적지 않는다.
    날짜·금액·인원 같은 표기 형식을 정한 조항은, 문서의 표기 모양이 조항이 정한 모양과 다르면 위반이다 (예: 조항이 2026.11.03 형식인데 문서가 2026-11-03).
+   기관명 조항은, 문서 앞부분(제목 등)에 나온 정식 기관명의 앞부분을 뺀 줄임말(예: 정식 명칭이 "한국시험공사"인데 "시험공사"로 쓴 경우)도 약칭으로 본다.
    "(표 안)"이 붙은 문장은 표 안의 글자다. 표로 정리하라는 조항은 이미 표 안에 있으면 지킨 것이다.
 3. 조항의 "예:" 부분은 설명용 예시일 뿐이다. 예시와 다르다는 이유만으로 위반으로 보지 않는다.
 4. 문서에 반드시 들어가야 하는 내용이 조항에 정해져 있는데 [검사할 문서]에 그 내용이 전혀 없을 때만 h를 빈 문자열로 두고 위반으로 적는다. 있는지 애매하면 적지 않는다.
@@ -83,6 +84,9 @@ const KEPT = /충족한다|충족합니다|충족하고|준수|지켰|지키고 
 const BROKEN = /않|못|없|다르|다릅|빠|어긋|위반|아니/;
 const saysKept = (reason: string) => KEPT.test(reason) && !BROKEN.test(reason.replace(/수습기간을 두는 경우|반드시/g, ""));
 
+// AI가 번호 뒤에 설명까지 붙여 돌려주는 경우(예: "M12 [제4장 4.2항] …")가 있어 맨 앞 번호만 쓴다
+const idOf = (value: string) => value.trim().match(/^[HM]\d+/)?.[0] ?? value.trim();
+
 const squash = (text: string) => text.replace(/\s+/g, "");
 
 async function askChunk(clauses: { id: string; clause: ManualClause }[], items: HItem[]) {
@@ -128,12 +132,12 @@ export async function checkManualRules(doc: HwpDocument, manual: ManualDoc): Pro
   const seen = new Set<string>();
   for (const answer of answers) {
     for (const v of answer.violations) {
-      const clause = byM.get(v.clause.trim());
+      const clause = byM.get(idOf(v.clause));
       const quote = v.quote.trim();
       // 없는 조항이거나 조항에 없는 문장을 인용했으면 버린다 (지어내지 않기, PRD 5번)
       if (!clause || !quote || !squash(clause.text).includes(squash(quote))) continue;
       if (saysKept(v.reason)) continue;
-      const h = v.h.trim() ? byH.get(v.h.trim()) : undefined;
+      const h = v.h.trim() ? byH.get(idOf(v.h)) : undefined;
       if (v.h.trim() && !h) continue;
       // 내용이 빠졌다는 지적은 문서 전체를 한 번에 본 경우에만 믿는다
       if (!h && chunks.length > 1) continue;

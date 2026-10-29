@@ -75,6 +75,8 @@ async function askChunk(items: HItem[]) {
 
 export async function checkSpelling(doc: HwpDocument): Promise<Finding[]> {
   const items: HItem[] = doc.paragraphs.map((p, i) => ({ id: `H${i + 1}`, text: p.text.replace(/\n/g, " "), index: i }));
+  // AI가 번호 뒤에 설명을 붙여 돌려줘도 맨 앞 번호(H12)만 쓴다
+  const idOf = (value: string) => value.trim().match(/^H\d+/)?.[0] ?? value.trim();
   const byId = new Map(items.map((h) => [h.id, h]));
   const chunks = chunk(items.filter((h) => /[가-힣]/.test(h.text)));
   if (chunks.length === 0) return [];
@@ -94,7 +96,7 @@ export async function checkSpelling(doc: HwpDocument): Promise<Finding[]> {
   const seen = new Set<string>();
   for (const answer of answers) {
     for (const issue of answer.issues) {
-      const h = byId.get(issue.h);
+      const h = byId.get(idOf(issue.h));
       const wrong = issue.wrong.trim();
       const right = issue.right.trim();
       // 문장에 실제로 없는 글자를 짚었거나, 고칠 것이 없는 답은 버린다 (지어내지 않기)

@@ -60,6 +60,9 @@ function cleanReason(reason: string): string {
 
 const norm = (s: string) => s.replace(/\s+/g, "");
 
+// AI가 번호 뒤에 설명을 붙여 돌려줘도 맨 앞 번호(H12, W5)만 쓴다
+const idOf = (value: string) => value.trim().match(/^[HW]\d+/)?.[0] ?? value.trim();
+
 function hwpItems(doc: HwpDocument): HItem[] {
   const out: HItem[] = doc.paragraphs.map((p, i) => ({ id: `H${i + 1}`, text: p.text.replace(/\n/g, " "), index: i }));
   for (const img of doc.imageTexts ?? []) {
@@ -214,8 +217,8 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
 
   for (const answer of answers) {
     for (const pair of answer.pairs) {
-      const h = hById.get(pair.h);
-      const wList = pair.w.map((id) => wById.get(id)).filter((w): w is WItem => Boolean(w) && !matchedW.has(w!.id));
+      const h = hById.get(idOf(pair.h));
+      const wList = pair.w.map((id) => wById.get(idOf(id))).filter((w): w is WItem => Boolean(w) && !matchedW.has(w!.id));
       // 없는 번호를 쓴 답은 버린다 (지어내지 않기)
       if (!h || matchedH.has(h.id) || wList.length === 0) continue;
       wList.forEach((w) => pairedW.add(w.id));
@@ -253,7 +256,7 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
     }
 
     for (const id of answer.hwpMissing) {
-      const h = hById.get(id);
+      const h = hById.get(idOf(id));
       if (!h || matchedH.has(h.id)) continue;
       const o = origin(h, []);
       findings.push({
@@ -271,7 +274,7 @@ export async function compareTexts(doc: HwpDocument, page: WebPage): Promise<Fin
 
   // 웹페이지 쪽 누락: 모든 묶음이 "대응 없음"이라 했고, 어느 묶음에서도 짝지어지지 않은 문장만
   const webMissing = answers
-    .map((a) => new Set(a.webMissing))
+    .map((a) => new Set(a.webMissing.map(idOf)))
     .reduce<Set<string> | null>((acc, s) => (acc ? new Set([...acc].filter((id) => s.has(id))) : s), null);
   for (const id of webMissing ?? []) {
     const w = wById.get(id);
