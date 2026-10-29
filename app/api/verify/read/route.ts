@@ -25,7 +25,13 @@ async function readHwpFile(pathname: string): Promise<{ result: HwpReadResult; b
   return { result: hwpFail("unsupported") };
 }
 
+// 이미지 글자 읽기는 요청이 시작된 뒤 이 시간(ms)까지만 한다. Vercel 함수 제한 60초 안에 끝내기 위해 여유를 둔다.
+const IMAGE_BUDGET_MS = 48_000;
+// 화면으로 돌려주는 글자 한도 (Vercel 응답 한도 약 4.5MB보다 작게)
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
 export async function POST(request: Request) {
+  const deadlineAt = Date.now() + IMAGE_BUDGET_MS;
   let body: { url?: unknown; pathname?: unknown };
   try {
     body = await request.json();
@@ -46,11 +52,20 @@ export async function POST(request: Request) {
     if (!web.ok) return Response.json({ ok: false, error: web.error, side: "web" }, { status: 422 });
     // 이미지 속 글자 읽기: 웹페이지와 한글파일의 이미지를 함께 읽는다 (DESIGN.md §3 1단계 4번)
     const [webPage, hwpDoc] = await Promise.all([
-      attachWebImageTexts(web.page),
-      hwpRead.bytes ? attachHwpImageTexts(hwp.doc, hwpRead.bytes) : hwp.doc,
+      attachWebImageTexts(web.page, deadlineAt),
+      hwpRead.bytes ? attachHwpImageTexts(hwp.doc, hwpRead.bytes, deadlineAt) : hwp.doc,
     ]);
+    // 그림 속 글자까지 읽었는데도 글자가 하나도 없으면 비교하지 않고 멈춘다 (비교하면 상대 문장 전체가 "누락"으로 쏟아진다)
+    if (hwpDoc.charCount === 0 && !hwpDoc.imageTexts?.length) return Response.json({ ok: false, error: hwpFail("empty").error, side: "hwp" }, { status: 422 });
+    if (webPage.charCount < 20 && !webPage.imageTexts?.length) {
+      return Response.json({ ok: false, error: { code: "empty", message: "웹페이지에서 공고 본문을 찾지 못했습니다. URL이 공고 상세 페이지인지 확인해 주세요." }, side: "web" }, { status: 422 });
+    }
     // 읽은 글자는 저장하지 않고 화면에 돌려준다 (DESIGN.md §3 단계 사이에 글자를 넘기는 방법)
-    return Response.json({ ok: true, web: webPage, hwp: hwpDoc, pair: checkPair(hwpDoc, webPage) });
+    const payload = JSON.stringify({ ok: true, web: webPage, hwp: hwpDoc, pair: checkPair(hwpDoc, webPage) });
+    if (new TextEncoder().encode(payload).byteLength > MAX_RESPONSE_BYTES) {
+      return Response.json({ ok: false, error: { code: "too_long", message: "문서 글자가 너무 많아 검증할 수 없습니다. 부점에 내용을 나눈 파일을 요청해 주세요." } }, { status: 413 });
+    }
+    return new Response(payload, { headers: { "Content-Type": "application/json" } });
   } catch {
     return Response.json(
       { ok: false, error: { code: "unknown", message: "파일을 읽는 중 문제가 생겼습니다. 다시 시도해 주세요." } },

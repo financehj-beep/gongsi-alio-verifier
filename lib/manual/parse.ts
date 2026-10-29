@@ -6,9 +6,10 @@ import type { ManualClause } from "@/lib/manual/types";
 export type ManualLine = { text: string; page?: number };
 
 // 제3장 채용공시
-const CHAPTER = /^제\s*(\d+)\s*장\s*(.*)$/;
+// "제3장에서 …"처럼 조사가 바로 붙은 줄은 본문 문장이므로 장·조 제목으로 보지 않는다
+const CHAPTER = /^제\s*(\d+)\s*장(?=\s|$)\s*(.*)$/;
 // 제5조(목적) 내용 / 제5조 내용
-const ARTICLE = /^제\s*(\d+)\s*조(?:\s*(?:의\s*\d+)?)?\s*(?:\(([^)]*)\))?\s*(.*)$/;
+const ARTICLE = /^제\s*(\d+)\s*조(?:\s*의\s*(\d+))?(?=\s|\(|$)\s*(?:\(([^)]*)\))?\s*(.*)$/;
 // 3.1 내용 / 3.1.2 내용. 날짜(2026.11.03)가 항 번호로 읽히지 않게 앞자리는 1~2자리만 받는다.
 const ITEM = /^(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)\s*[.)]?\s+(.*)$/;
 
@@ -39,11 +40,12 @@ export function parseManualLines(lines: ManualLine[]): ParsedManual {
 
     const article = ARTICLE.exec(text);
     if (article) {
-      const [, no, title, rest] = article;
+      const [, no, sub, title, rest] = article;
+      const articleNo = `제${no}조${sub ? `의${sub}` : ""}`;
       push({
-        label: `제${no}조`,
+        label: articleNo,
         chapter: chapterTitle,
-        number: `제${no}조`,
+        number: articleNo,
         text: [title ? `(${title})` : "", rest].filter(Boolean).join(" "),
         page,
       });

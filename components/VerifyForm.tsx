@@ -60,6 +60,9 @@ function progressOf(status: Status): { states: Record<StepName, StepState>; deta
   }
 }
 
+const MAX_SEND_BYTES = 4 * 1024 * 1024;
+const TOO_LONG = "문서 글자가 너무 많아 검증할 수 없습니다. 부점에 내용을 나눈 파일을 요청해 주세요.";
+
 type Texts = { web: WebPage; hwp: HwpDocument };
 
 type Status =
@@ -129,6 +132,10 @@ export default function VerifyForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: url.trim(), pathname }),
       });
+      if (res.status === 413) {
+        setStatus({ kind: "error", step: "읽기", message: TOO_LONG });
+        return;
+      }
       const data = (await res.json()) as
         | { ok: true; web: WebPage; hwp: HwpDocument; pair: PairCheck }
         | { ok: false; error: { message: string } };
@@ -154,11 +161,22 @@ export default function VerifyForm() {
     for (const { step, url, body } of steps) {
       setStatus({ kind: "running", step, findings, ...texts });
       try {
+        const payload = JSON.stringify(body);
+        // 서버로 한 번에 보내는 양이 4MB를 넘으면 보내지 않고 안내한다 (DESIGN.md §3 전송 한도)
+        if (new TextEncoder().encode(payload).byteLength > MAX_SEND_BYTES) {
+          setStatus({ kind: "error", step, message: TOO_LONG, findings, ...texts });
+          return;
+        }
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: payload,
         });
+        // 서버 앞단이 너무 크다며 거절한 경우(413)는 글자 형식이 아니라 상태 번호로 알아본다
+        if (res.status === 413) {
+          setStatus({ kind: "error", step, message: TOO_LONG, findings, ...texts });
+          return;
+        }
         const data = (await res.json()) as
           | { ok: true; findings: Finding[]; manual?: { fileName: string; replacedAt?: string } }
           | { ok: false; error: { message: string } };

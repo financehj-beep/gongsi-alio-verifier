@@ -33,7 +33,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const body = (await request.json()) as HandleUploadBody;
+  let body: HandleUploadBody;
+  try {
+    body = (await request.json()) as HandleUploadBody;
+  } catch {
+    return Response.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
+  }
 
   try {
     const result = await handleUpload({
@@ -60,7 +65,9 @@ export async function POST(request: Request) {
     });
     return Response.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "업로드 허가를 내주지 못했습니다.";
+    // 우리가 만든 안내 문구만 그대로 보내고, 라이브러리 내부 오류 문장은 숨긴다
+    const own = ["허용되지 않은 저장 위치입니다.", "허용되지 않은 파일 형식입니다."];
+    const message = error instanceof Error && own.includes(error.message) ? error.message : "업로드 허가를 내주지 못했습니다.";
     return Response.json({ error: message }, { status: 400 });
   }
 }

@@ -1,6 +1,7 @@
 import "server-only";
 import * as cheerio from "cheerio";
 import type { ImageStats, ImageText } from "@/lib/readers/image-types";
+import { finalUrlOf, readLimited, safeFetch, UnsafeUrlError } from "@/lib/security/safe-fetch";
 
 // Design Ref: DESIGN.md §3 1단계 읽기 2번 — URL의 웹페이지를 가져와 메뉴·광고·스크립트를 걷어내고 본문 후보만 남긴다
 
@@ -50,26 +51,11 @@ function fail(code: WebReadError["code"]): { ok: false; error: WebReadError } {
   return { ok: false, error: { code, message: ERRORS[code] } };
 }
 
-// 서버가 내부망 주소를 대신 열지 않도록 막는다
-export function isPublicHttpUrl(value: string): URL | null {
+// 글자 모양이 http·https 주소인지만 먼저 본다. 공개 주소인지는 가져올 때마다 safeFetch가 확인한다.
+export function parseHttpUrl(value: string): URL | null {
   try {
     const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    const host = url.hostname.toLowerCase();
-    if (
-      host === "localhost" ||
-      host.endsWith(".localhost") ||
-      host === "0.0.0.0" ||
-      host === "[::1]" ||
-      /^127\./.test(host) ||
-      /^10\./.test(host) ||
-      /^192\.168\./.test(host) ||
-      /^169\.254\./.test(host) ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-    ) {
-      return null;
-    }
-    return url;
+    return url.protocol === "http:" || url.protocol === "https:" ? url : null;
   } catch {
     return null;
   }
@@ -80,8 +66,7 @@ type FetchResult = { ok: true; html: string; finalUrl: string } | { ok: false; e
 async function fetchHtml(url: URL): Promise<FetchResult> {
   let res: Response;
   try {
-    res = await fetch(url, {
-      redirect: "follow",
+    res = await safeFetch(url, {
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {
         // 일반 브라우저처럼 요청해야 열리는 사이트가 많다
@@ -92,6 +77,7 @@ async function fetchHtml(url: URL): Promise<FetchResult> {
       },
     });
   } catch (error) {
+    if (error instanceof UnsafeUrlError) return fail("invalid_url");
     const name = (error as { name?: string }).name;
     return fail(name === "TimeoutError" || name === "AbortError" ? "timeout" : "unreachable");
   }
@@ -103,8 +89,10 @@ async function fetchHtml(url: URL): Promise<FetchResult> {
   const type = res.headers.get("content-type") ?? "";
   if (type && !type.includes("html")) return fail("not_html");
 
-  const buffer = new Uint8Array(await res.arrayBuffer()).slice(0, MAX_HTML_BYTES);
-  return { ok: true, html: decode(buffer, type), finalUrl: res.url || url.toString() };
+  // 너무 큰 페이지는 5MB까지만 읽는다
+  const buffer = (await readLimited(res, MAX_HTML_BYTES).catch(() => null)) ?? new Uint8Array();
+  if (buffer.byteLength === 0) return fail("empty");
+  return { ok: true, html: decode(buffer, type), finalUrl: finalUrlOf(res, url.toString()) };
 }
 
 // 한국 공공기관 사이트는 EUC-KR인 경우가 있어 글자 인코딩을 확인해 읽는다
@@ -215,7 +203,7 @@ async function readDetailPage(
 }
 
 export async function readWebPage(input: string): Promise<{ ok: true; page: WebPage } | { ok: false; error: WebReadError }> {
-  const url = isPublicHttpUrl(input.trim());
+  const url = parseHttpUrl(input.trim());
   if (!url) return fail("invalid_url");
 
   const first = await fetchHtml(url);
@@ -241,16 +229,19 @@ export async function readWebPage(input: string): Promise<{ ok: true; page: WebP
         return null;
       }
     })
-    .filter((u): u is URL => u !== null && u.hostname.endsWith(new URL(first.finalUrl).hostname.replace(/^www\./, "")))
+    .filter((u): u is URL => {
+      // 같은 사이트의 창만 읽는다 (evilexample.com이 example.com으로 보이지 않게 점까지 맞춰 본다)
+      const base = new URL(first.finalUrl).hostname.replace(/^www\./, "");
+      return u !== null && (u.hostname === base || u.hostname.endsWith(`.${base}`));
+    })
     .slice(0, MAX_FRAMES);
 
   let images = extractImages($, first.finalUrl, 0);
   const blocks = extractBlocks($);
 
-  for (const frameUrl of frameUrls) {
-    const safe = isPublicHttpUrl(frameUrl.toString());
-    if (!safe) continue;
-    const frame = await fetchHtml(safe);
+  // 안쪽 창들은 동시에 읽어 전체 읽기 시간을 줄인다 (60초 제한 안에 끝내기 위해)
+  const frames = await Promise.all(frameUrls.map((u) => fetchHtml(u)));
+  for (const frame of frames) {
     if (!frame.ok) continue;
     const $frame = cheerio.load(frame.html);
     images = images.concat(extractImages($frame, frame.finalUrl, images.length));

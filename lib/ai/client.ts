@@ -8,7 +8,8 @@ export function getOpenAI(): OpenAI {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY가 설정되지 않았습니다.");
   }
-  client ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  // 답이 늦으면 25초에서 끊고 자동 재시도는 하지 않는다. 재시도는 코드가 남은 시간을 보고 직접 정한다 (Vercel 60초 제한 안에 끝내기 위해)
+  client ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 25_000, maxRetries: 0 });
   return client;
 }
 
