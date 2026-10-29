@@ -1,36 +1,77 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 공시 알리오 사전검증기
 
-## Getting Started
+부점이 보낸 공시용 한글파일(.hwp·.hwpx)을 **알리오에 입력하기 전에**, 실제 공시된 웹페이지와 비교하고 공사 공시 매뉴얼의 작성 규칙을 지켰는지 검증하는 웹 앱입니다. 사용자는 경영공시 담당자 1명입니다.
 
-First, run the development server:
+> 공시 담당자가 한글파일과 웹페이지를 눈으로 한 줄씩 대조하던 일을, 웹페이지 주소 1개와 한글파일 1개를 넣으면 한 번에 검사해 주는 도구로 바꿉니다. (사람이 하면 약 30분 → 앱 검사 1분 이내가 목표)
+
+## 무엇을 검사하나요
+
+주소 1개 + 한글파일 1개를 넣고 [검증 시작]을 누르면 결과를 5개 카테고리로 보여줍니다. 모든 결과에는 **위치와 근거 원문**이 붙고, 한 화면에 20건씩 넘겨 봅니다.
+
+| 카테고리 | 내용 |
+|---|---|
+| 불일치 | 한글파일과 웹페이지의 글자·숫자·날짜 차이. 문구 차이는 **오자 / 탈자 / 띄어쓰기** 꼬리표로 나눠 걸러 볼 수 있음 |
+| 누락 | 한쪽에만 있는 내용. 문서 전체 맥락으로 한 번 더 판단해 표현만 다른 경우는 제외하고, 일부만 빠졌으면 빠진 내용을 적어 줌 |
+| 확인 필요 | 이미지 속 글자를 또렷이 읽지 못했거나, 표현·표 구조가 크게 달라 같은 내용인지 판단하기 어려운 경우 |
+| 맞춤법 | 한글파일의 일반 맞춤법·띄어쓰기·표준어 오류와 고칠 표현 |
+| 규칙 위반 | 공시 매뉴얼의 조항을 어긴 부분. **조항 번호와 원문 인용**을 함께 표시하고, 문서의 공시 항목(예: 채용공시)에 맞는 장의 규칙으로 검사 |
+
+숫자·금액·날짜·인원·전화번호는 AI에만 맡기지 않고 **코드가 한 글자씩 다시 대조**합니다(표기만 달라도, 순서만 바뀌어도 불일치). 웹페이지와 한글파일 속 **이미지의 글자도 읽어서** 비교합니다.
+
+## 이용 흐름
+
+1. 공시된 웹페이지 주소를 입력합니다.
+2. 짝이 되는 한글파일(.hwp·.hwpx, 20MB 이하)을 올립니다.
+3. 앱이 읽기 → 비교 → 맞춤법 → 매뉴얼 검사를 차례로 진행하며 진행 상황을 보여줍니다.
+4. 결과를 확인하고, 오류가 있으면 부점에 수정을 요청합니다.
+
+매뉴얼이 개정되면 `/manual` 화면에서 새 파일(.hwp·.hwpx·PDF)로 교체하고, 이전 매뉴얼은 버전 이력으로 남습니다.
+
+## 만들지 않은 것
+
+알리오 자동 입력, 부점 자동 연락, 로그인·여러 사용자(공용 암호 1개만 예외), 여러 건 동시 검증, 한글파일 외 형식 검증, 로그인이 필요한 웹페이지, 서식 비교, 매뉴얼 되돌리기. 자세한 범위는 [PRD.md](PRD.md)를 봅니다.
+
+## 기술 스택
+
+- Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4
+- AI: OpenAI API (서버에서만 호출)
+- 파일 저장: Vercel Blob (공시 매뉴얼·버전 이력, 큰 한글파일 임시 업로드)
+- 배포: Vercel
+
+## 직접 실행해 보기
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev     # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+프로젝트 루트에 `.env` 파일을 만들고 아래 값을 넣습니다. (값은 저장소에 올리지 않습니다.)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| 이름 | 설명 |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI API 키 (서버 전용) |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob 저장소 토큰 |
+| `APP_PASSWORD` | 접속 공용 암호. 비우면 개발 중에는 열려 있고, 배포본은 접속이 막힙니다 |
+| `OPENAI_MODEL` | (선택) 사용할 모델 이름 |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run lint    # 코드 검사
+npm run build   # 배포용 빌드
+```
 
-## Learn More
+## 문서
 
-To learn more about Next.js, take a look at the following resources:
+| 문서 | 내용 |
+|---|---|
+| [PRD.md](PRD.md) | 서비스 기획서: 문제, 목표, 기능, 범위, 보안·개인정보 |
+| [PLAN.md](PLAN.md) | 개발 계획서: 성공 기준과 작업 목록 |
+| [DESIGN.md](DESIGN.md) | 설계: 화면 구성, 데이터 흐름, 기술 선택 |
+| [CHECK.md](CHECK.md) | 점검 결과: 설계 대비 차이, 보안 점검, 남은 보완점 |
+| [MEASUREMENT.md](MEASUREMENT.md) | 성공 기준 측정 기록 |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 보안·개인정보와 한계
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- 모든 화면과 서버 기능은 공용 암호로 잠겨 있고, 서버가 외부 주소를 가져올 때는 내부망 접근을 막는 전용 함수만 씁니다.
+- 업로드한 한글파일·웹페이지 내용·검증 결과는 앱에 저장하지 않습니다(저장하는 것은 매뉴얼과 그 이력뿐). 검증을 위해 내용은 OpenAI로 전송됩니다.
+- 이 저장소의 시험 자료는 **직접 만든 가상 샘플**과 실습용 샘플 매뉴얼입니다. 실제 부점 파일이나 비공개 매뉴얼로 운영하려면 먼저 회사의 개인정보·보안 검토 승인이 필요합니다.
+- 정확도 측정 수치는 가상 샘플 기준이라 실제 문서에서는 다를 수 있습니다. 자세한 내용은 [MEASUREMENT.md](MEASUREMENT.md)와 [CHECK.md](CHECK.md)를 봅니다.

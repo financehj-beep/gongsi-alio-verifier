@@ -42,3 +42,8 @@ next-env.d.ts
 
 # 시험용 .hwp 샘플(개인 문서일 수 있어 올리지 않는다)
 samples/*.hwp
+
+# 작업 도구 상태·삭제 대기 폴더·실제 공고에서 만든 시험 파일은 올리지 않는다
+/.bkit/
+/trash-can/
+samples/generated/saramin-planted.hwpx
