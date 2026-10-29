@@ -11,3 +11,13 @@ export function getOpenAI(): OpenAI {
   client ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   return client;
 }
+
+// 쓸 모델. 빠르고 저렴한 모델을 기본으로 하고, 바꾸려면 .env에 OPENAI_MODEL을 적는다.
+export function modelName(): string {
+  return process.env.OPENAI_MODEL || "gpt-5.4-mini";
+}
+
+// gpt-5 계열은 생각하는 정도를 낮춰 1분 목표 안에 답하게 한다 (DESIGN.md §3 처리 시간 배분)
+export function reasoningOption(): { reasoning?: { effort: "low" } } {
+  return modelName().startsWith("gpt-5") ? { reasoning: { effort: "low" } } : {};
+}

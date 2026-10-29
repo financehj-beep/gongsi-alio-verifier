@@ -15,6 +15,8 @@ export function formatHwpLocation(loc: HwpLocation): string {
 }
 
 export function formatWebLocation(loc: WebLocation): string {
+  // sentence가 0이면 소제목 그 자체
+  if (loc.sentence === 0) return `웹 소제목 "${loc.heading}"`;
   return loc.heading ? `웹 "${loc.heading}" ${loc.sentence}번째 문장` : `웹 ${loc.sentence}번째 문장`;
 }
 

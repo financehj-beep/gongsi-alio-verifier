@@ -17,34 +17,46 @@ import HwpPreview from "@/components/HwpPreview";
 import PairWarning from "@/components/PairWarning";
 import type { PairCheck } from "@/lib/checks/pair";
 import ProgressSteps, { type StepName, type StepState } from "@/components/ProgressSteps";
+import ResultsView from "@/components/ResultsView";
+import type { Finding } from "@/lib/types";
 
-// 지금 상태를 4단계 진행 표시로 바꾼다. 비교·맞춤법·매뉴얼은 아직 만들지 않아 "준비 중"으로 보인다.
+// 지금 상태를 4단계 진행 표시로 바꾼다. 맞춤법·매뉴얼은 아직 만들지 않아 "준비 중"으로 보인다.
 function progressOf(status: Status): { states: Record<StepName, StepState>; detail?: string } | null {
-  const later = { 비교: "unavailable", 맞춤법: "unavailable", 매뉴얼: "unavailable" } as const;
+  const later = { 맞춤법: "unavailable", 매뉴얼: "unavailable" } as const;
   switch (status.kind) {
     case "idle":
       return null;
     case "uploading":
-      return { states: { 읽기: "active", ...later }, detail: `한글파일 올리는 중 ${status.percent}%` };
+      return { states: { 읽기: "active", 비교: "waiting", ...later }, detail: `한글파일 올리는 중 ${status.percent}%` };
     case "reading":
-      return { states: { 읽기: "active", ...later }, detail: "웹페이지와 한글파일 읽는 중" };
+      return { states: { 읽기: "active", 비교: "waiting", ...later }, detail: "웹페이지와 한글파일 읽는 중" };
     case "pairWarning":
       // 읽기는 끝났고 담당자의 선택을 기다리는 중이라 시간을 세지 않는다
-      return { states: { 읽기: "done", ...later }, detail: "짝 확인: 담당자가 [계속] 또는 [취소]를 고를 차례" };
-    case "read":
-      return { states: { 읽기: "done", ...later } };
+      return { states: { 읽기: "done", 비교: "waiting", ...later }, detail: "짝 확인: 담당자가 [계속] 또는 [취소]를 고를 차례" };
+    case "comparing":
+      return { states: { 읽기: "done", 비교: "active", ...later }, detail: "웹페이지와 한글파일 비교 중" };
+    case "compared":
+      return { states: { 읽기: "done", 비교: "done", ...later } };
     case "error":
-      return { states: { 읽기: "error", ...later } };
+      return {
+        states:
+          status.step === "읽기"
+            ? { 읽기: "error", 비교: "waiting", ...later }
+            : { 읽기: "done", 비교: "error", ...later },
+      };
   }
 }
+
+type Texts = { web: WebPage; hwp: HwpDocument };
 
 type Status =
   | { kind: "idle" }
   | { kind: "uploading"; percent: number }
   | { kind: "reading" }
-  | { kind: "pairWarning"; web: WebPage; hwp: HwpDocument; pair: PairCheck }
-  | { kind: "read"; web: WebPage; hwp: HwpDocument }
-  | { kind: "error"; message: string };
+  | ({ kind: "pairWarning"; pair: PairCheck } & Texts)
+  | ({ kind: "comparing" } & Texts)
+  | ({ kind: "compared"; findings: Finding[] } & Texts)
+  | ({ kind: "error"; message: string; step: StepName } & Partial<Texts>);
 
 // Design Ref: DESIGN.md §2.1 입력 칸 — URL 1개 + 한글파일 1개 + [검증 시작]
 export default function VerifyForm() {
@@ -77,7 +89,7 @@ export default function VerifyForm() {
       setStatus({ kind: "uploading", percent: 0 });
       const { ready } = (await (await fetch("/api/upload")).json()) as { ready: boolean };
       if (!ready) {
-        setStatus({ kind: "error", message: "파일 보관함이 아직 연결되지 않았습니다." });
+        setStatus({ kind: "error", step: "읽기", message: "파일 보관함이 아직 연결되지 않았습니다." });
         return;
       }
       const ext = extensionOf(file.name);
@@ -90,7 +102,7 @@ export default function VerifyForm() {
         onUploadProgress: ({ percentage }) => setStatus({ kind: "uploading", percent: Math.round(percentage) }),
       }));
     } catch {
-      setStatus({ kind: "error", message: "파일을 올리지 못했습니다. 잠시 후 다시 시도해 주세요." });
+      setStatus({ kind: "error", step: "읽기", message: "파일을 올리지 못했습니다. 잠시 후 다시 시도해 주세요." });
       return;
     }
 
@@ -105,17 +117,38 @@ export default function VerifyForm() {
       const data = (await res.json()) as
         | { ok: true; web: WebPage; hwp: HwpDocument; pair: PairCheck }
         | { ok: false; error: { message: string } };
-      if (!data.ok) setStatus({ kind: "error", message: data.error.message });
+      if (!data.ok) setStatus({ kind: "error", step: "읽기", message: data.error.message });
       // 짝 확인: 다른 공고로 보이면 담당자가 계속할지 고른다
       else if (!data.pair.likelySame) setStatus({ kind: "pairWarning", web: data.web, hwp: data.hwp, pair: data.pair });
-      else setStatus({ kind: "read", web: data.web, hwp: data.hwp });
+      else await compare({ web: data.web, hwp: data.hwp });
     } catch {
-      setStatus({ kind: "error", message: "파일을 읽는 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요." });
+      setStatus({ kind: "error", step: "읽기", message: "파일을 읽는 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요." });
+    }
+  }
+
+  // 2단계 비교: 1단계에서 받은 글자를 다시 보낸다 (DESIGN.md §3 단계 사이에 글자를 넘기는 방법)
+  async function compare(texts: Texts) {
+    setStatus({ kind: "comparing", ...texts });
+    try {
+      const res = await fetch("/api/verify/compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(texts),
+      });
+      const data = (await res.json()) as { ok: true; findings: Finding[] } | { ok: false; error: { message: string } };
+      setStatus(
+        data.ok
+          ? { kind: "compared", findings: data.findings, ...texts }
+          : { kind: "error", step: "비교", message: data.error.message, ...texts },
+      );
+    } catch {
+      setStatus({ kind: "error", step: "비교", message: "AI 검사 중 문제가 생겼습니다 (비교 단계). 다시 시도해 주세요.", ...texts });
     }
   }
 
   // 짝 확인 경고가 떠 있는 동안에는 먼저 [계속]이나 [취소]를 고르게 한다
-  const busy = status.kind === "uploading" || status.kind === "reading" || status.kind === "pairWarning";
+  const busy = ["uploading", "reading", "pairWarning", "comparing"].includes(status.kind);
+  const texts = "web" in status && status.web && status.hwp ? { web: status.web, hwp: status.hwp } : null;
   const progress = progressOf(status);
 
   return (
@@ -175,12 +208,21 @@ export default function VerifyForm() {
       {status.kind === "pairWarning" && (
         <PairWarning
           pair={status.pair}
-          onContinue={() => setStatus({ kind: "read", web: status.web, hwp: status.hwp })}
+          onContinue={() => compare({ web: status.web, hwp: status.hwp })}
           onCancel={() => setStatus({ kind: "idle" })}
         />
       )}
-      {status.kind === "read" && <HwpPreview doc={status.hwp} />}
-      {status.kind === "read" && <WebPreview page={status.web} />}
+      {status.kind === "compared" && <ResultsView findings={status.findings} />}
+      {texts && status.kind !== "pairWarning" && (
+        // 꺼낸 글자는 필요할 때만 펼쳐 본다
+        <details className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600 dark:text-slate-300">꺼낸 글자 보기</summary>
+          <div className="mt-4 space-y-4">
+            <HwpPreview doc={texts.hwp} />
+            <WebPreview page={texts.web} />
+          </div>
+        </details>
+      )}
     </div>
   );
 }
