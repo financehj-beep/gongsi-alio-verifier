@@ -87,6 +87,7 @@ export default function FindingCard({ finding, number }: { finding: Finding; num
           </Line>
         )}
         {f.suggestion && <Line label="고칠 표현">{f.suggestion}</Line>}
+        {f.manualClause?.chapter && <Line label="공시 항목">{f.manualClause.chapter}</Line>}
         {f.manualClause && (
           <Line label="매뉴얼 조항">
             {f.manualClause.item}

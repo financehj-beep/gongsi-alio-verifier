@@ -49,7 +49,7 @@ export type Finding = {
   // 맞춤법일 때만: 같은 오류가 있는 다른 위치들 (같은 틀린 표현·고친 표현을 한 카드로 합친 것)
   moreLocations?: { hwpLocation: HwpLocation; hwpText: string }[];
   // 규칙 위반일 때만. 페이지를 모르면 항목 번호만 쓴다.
-  manualClause?: { item: string; page?: number; quote?: string };
+  manualClause?: { item: string; chapter?: string; page?: number; quote?: string };
   explanation: string;
 };
 
