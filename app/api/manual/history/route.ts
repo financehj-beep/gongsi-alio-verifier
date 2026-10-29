@@ -1,5 +1,5 @@
 import { connection } from "next/server";
-import { hasBlobToken } from "@/lib/storage/blob";
+import { cleanupOldTmpFiles, hasBlobToken } from "@/lib/storage/blob";
 import { readHistory, toPublic } from "@/lib/manual/store";
 
 // Design Ref: DESIGN.md §6 매뉴얼 이력 보기 — 이력 목록(저장 위치 제외)만 돌려준다
@@ -9,6 +9,8 @@ export async function GET() {
     return Response.json({ ok: false, error: { message: "파일 보관함이 아직 연결되지 않았습니다." } }, { status: 503 });
   }
   try {
+    // 이력을 보여줄 때도 1시간 넘은 임시 파일을 정리한다 (DESIGN.md §3 남은 임시 파일 정리). 실패해도 이력은 보여준다.
+    await cleanupOldTmpFiles().catch(() => null);
     return Response.json({ ok: true, versions: toPublic(await readHistory()) });
   } catch {
     return Response.json({ ok: false, error: { message: "매뉴얼 이력을 불러오지 못했습니다." } }, { status: 500 });
