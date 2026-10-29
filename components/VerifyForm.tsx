@@ -224,7 +224,9 @@ export default function VerifyForm() {
               setUrl(e.target.value);
               setUrlError(null);
             }}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+            // 검증 중에 주소를 바꾸면 화면과 결과가 어긋나므로 잠근다
+            disabled={busy}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950"
           />
           {urlError && <p className="text-sm text-red-600">{urlError}</p>}
         </div>
@@ -238,7 +240,9 @@ export default function VerifyForm() {
             type="file"
             accept=".hwp,.hwpx"
             onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
-            className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-4 file:py-2 dark:file:bg-slate-800"
+            // 검증 중에 파일을 바꾸면 진행 중인 검증이 화면에서 사라져 버리므로 잠근다
+            disabled={busy}
+            className="block w-full text-sm disabled:opacity-50 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-4 file:py-2 dark:file:bg-slate-800"
           />
           <p className="text-sm text-slate-500">
             {file ? `${file.name} · ${formatBytes(file.size)}` : ".hwp·.hwpx, 20MB까지"}
